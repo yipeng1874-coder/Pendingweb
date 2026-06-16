@@ -113,6 +113,7 @@ function ItemRow({ item, itemRecord, recordId, onDone, allowSupplementAfterSubmi
   const [linkConfirmed, setLinkConfirmed] = useState(itemRecord?.isLinkConfirmed ?? false);
   const [uploading, setUploading] = useState(false);
   const [localFiles, setLocalFiles] = useState<Array<{ file: File; previewUrl: string }>>([]);
+  const [isDragOver, setIsDragOver] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -177,6 +178,20 @@ function ItemRow({ item, itemRecord, recordId, onDone, allowSupplementAfterSubmi
     const previewUrl = URL.createObjectURL(file);
     setLocalFiles((prev) => [...prev, { file, previewUrl }]);
     if (fileRef.current) fileRef.current.value = "";
+  }
+
+  function handleDrop(e: React.DragEvent<HTMLDivElement>) {
+    e.preventDefault();
+    setIsDragOver(false);
+    const files = Array.from(e.dataTransfer.files).filter((f) => f.type.startsWith("image/"));
+    for (const file of files) {
+      if (file.size > 1048576) {
+        alert(`图片 ${file.name} 超过 1MB，已跳过`);
+        continue;
+      }
+      const previewUrl = URL.createObjectURL(file);
+      setLocalFiles((prev) => [...prev, { file, previewUrl }]);
+    }
   }
 
   function removeLocalFile(previewUrl: string) {
@@ -337,8 +352,13 @@ function ItemRow({ item, itemRecord, recordId, onDone, allowSupplementAfterSubmi
                       ))}
                     </div>
                   )}
-                  {/* 本地预览 + 添加按钮 */}
-                  <div className="flex flex-wrap gap-2">
+                  {/* 本地预览 + 添加按钮（支持拖拽） */}
+                  <div
+                    className={`flex flex-wrap gap-2 rounded-lg border-2 border-dashed p-2 transition ${isDragOver ? "border-blue-400 bg-blue-50" : "border-slate-200"}`}
+                    onDragOver={(e) => { e.preventDefault(); setIsDragOver(true); }}
+                    onDragLeave={() => setIsDragOver(false)}
+                    onDrop={handleDrop}
+                  >
                     {localFiles.map(({ previewUrl }) => (
                       <div key={previewUrl} className="relative rounded-lg border border-blue-200 bg-white p-1">
                         <img src={previewUrl} alt="预览" className="h-16 w-16 rounded object-cover" />
@@ -359,9 +379,12 @@ function ItemRow({ item, itemRecord, recordId, onDone, allowSupplementAfterSubmi
                     >
                       <FileImage size={18} />
                     </button>
+                    {isDragOver && (
+                      <div className="flex flex-1 items-center justify-center text-sm text-blue-400">松开鼠标以添加图片</div>
+                    )}
                   </div>
                   <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={handleFileChange} />
-                  <p className="text-xs text-slate-400">支持 JPG / PNG / GIF / WebP，单张 ≤ 1MB{showSupplementEditor ? "，已提交后仍可继续追加" : ""}</p>
+                  <p className="text-xs text-slate-400">支持拖拽或点击上传，JPG / PNG / GIF / WebP，单张 ≤ 1MB{showSupplementEditor ? "，已提交后仍可继续追加" : ""}</p>
                   {localFiles.length > 0 && (
                     <button
                       type="button"
@@ -416,20 +439,25 @@ export function TaskRecordCard({ record, expanded, onToggle, onRefresh, formatDe
   const canSubmitRecord = record.status !== "submitted" && incompleteRequiredItems.length === 0 && items.length > 0;
 
 
+  // 日常任务使用内部独立展开状态，初始为 true（自动展开）
+  const [dailyExpanded, setDailyExpanded] = useState(true);
+  const isExpanded = dailyTaskInfo ? dailyExpanded : expanded;
+  const handleToggle = dailyTaskInfo ? () => setDailyExpanded((v) => !v) : onToggle;
+
   const [showExemptionInput, setShowExemptionInput] = useState(false);
   const [exemptionReason, setExemptionReason] = useState("");
   const [exemptionLoading, setExemptionLoading] = useState(false);
   const prevDoneItemCountRef = useRef(doneItems.length);
 
   useEffect(() => {
-    if (!expanded) return;
+    if (!isExpanded) return;
     if (pendingItems.length === 0 && doneItems.length > 0) {
       setShowDoneItems(true);
     } else if (doneItems.length > prevDoneItemCountRef.current) {
       setShowDoneItems(true);
     }
     prevDoneItemCountRef.current = doneItems.length;
-  }, [doneItems.length, expanded, pendingItems.length]);
+  }, [doneItems.length, isExpanded, pendingItems.length]);
 
   const isTemporaryTask = record.assignment?.category === "TEMPORARY";
   const canApplyExemption = !isTemporaryTask && record.status !== "submitted" && !record.exemption;
@@ -473,94 +501,99 @@ export function TaskRecordCard({ record, expanded, onToggle, onRefresh, formatDe
 
   return (
     <div className={`overflow-hidden border border-l-4 bg-white transition ${compact ? "rounded-2xl border-slate-200/80 shadow-[0_2px_10px_rgba(15,23,42,0.04)]" : "rounded-3xl border-slate-100 shadow-[0_8px_24px_rgba(15,23,42,0.05)]"} ${leftBorderColor}`}>
-      <button type="button" className={`flex w-full items-start text-left transition hover:bg-slate-50 ${compact ? "gap-2.5 p-3" : "items-center gap-4 p-4"}`} onClick={onToggle}>
-        <div className="min-w-0 flex-1">
-          {dailyTaskInfo ? (
-            /* ── 日常任务：标题与日期同一行 ── */
-            <div className="mb-1 flex flex-wrap items-center gap-x-2 gap-y-0.5">
-              <p className={`${compact ? "text-sm leading-5" : "text-base"} truncate font-semibold text-slate-900`}>{record.assignment?.template?.title ?? "任务"}</p>
-              <span className={`flex shrink-0 items-center gap-1 text-sm font-medium ${urgent ? "text-red-500" : "text-slate-500"}`}>
-                <Clock size={14} />{dailyTaskInfo.taskDateLabel}
-              </span>
-              {record.status === "overdue" && (
-                <span className="text-sm font-medium text-red-500">仅支持补录前一天</span>
-              )}
-              {currentIdentityId && record.identityId && record.identityId !== currentIdentityId && (
-                <span className="rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-600">来自主播身份任务</span>
-              )}
-            </div>
-          ) : (
-            /* ── 非日常任务：保持原有标签行不变 ── */
-            <div className="mb-1.5 flex flex-wrap items-center gap-1.5">
-              {!compact && <span className={`rounded-full px-1.5 py-0.5 text-[11px] font-medium ${status.cls}`}>{status.text}</span>}
-              {!compact && <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-500">{record.assignment?.category === "DAILY" ? "日常任务" : "临时任务"}</span>}
-              {tempModeMeta && !compact && <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${tempModeMeta.badge}`}>{tempModeMeta.label}</span>}
-              {!compact && <span className={`rounded-full px-1.5 py-0.5 text-[11px] font-medium ${subjectMeta.badge}`}>{subjectMeta.label}</span>}
-              {record.subjectType === "ORG" && record.subjectOrgType && <span className={`rounded-full px-1.5 py-0.5 text-[11px] font-medium ${orgTypeMeta[record.subjectOrgType].badge}`}>{orgTypeMeta[record.subjectOrgType].label}</span>}
-            </div>
-          )}
-          {!dailyTaskInfo && <p className={`${compact ? "line-clamp-2 text-sm leading-5" : "truncate text-base"} font-semibold text-slate-900`}>{record.assignment?.template?.title ?? "任务"}</p>}
-          {!dailyTaskInfo && templateDescription && (
-            <p className={`${compact ? "line-clamp-2" : "line-clamp-3"} mt-1 text-xs leading-5 text-slate-500`}>
-              <span className="font-medium text-slate-600">说明：</span>{templateDescription}
-            </p>
-          )}
-          {!dailyTaskInfo && (
-            <div className={`mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs font-medium ${urgent ? "text-red-500" : "text-slate-500"}`}>
-              <span className="flex items-center gap-1"><Clock size={12} />{formatDeadline(record)}</span>
-              {record.totalItems > 0 && (
-                <span>共{record.totalItems}项子任务{record.totalItems - record.doneItems > 0 ? `，未完成${record.totalItems - record.doneItems}项` : "，全部完成"}</span>
-              )}
-              {record.assignment?.category === "TEMPORARY" && <span className="max-w-full truncate">{record.subjectName ?? "未识别主体"}</span>}
-              {record.assignment?.category === "TEMPORARY" && record.assignment?.temporaryMode === "ANCHOR" && currentIdentityId && record.identityId && record.identityId !== currentIdentityId && (
-                <span className="rounded-full bg-amber-50 px-1.5 py-0.5 text-xs font-medium text-amber-600">来自主播身份任务</span>
-              )}
-            </div>
-          )}
-          {record.assignment?.category === "TEMPORARY" && compact && (
-            <div className="mt-2 text-xs font-medium leading-5 text-slate-500">
-              <p>{isTouchTask ? "发布者账号" : "发布人"}：{publisherLabel}</p>
-            </div>
-          )}
-          {record.assignment?.category === "TEMPORARY" && !compact && (
-            <div className="mt-2 space-y-1 text-xs leading-5 text-slate-500">
-              {isTouchTask ? (
-                <p>发布者账号：{publisherLabel}</p>
-              ) : (
-                <p>发布人：{publisherLabel}{publisherPhone ? ` · ${publisherPhone}` : ""}</p>
-              )}
-              {record.subjectType === "USER" && <p>完成主体：当前账号（同账号任一身份完成即视为完成）</p>}
-              {record.subjectType === "ORG" && (
-                <>
-                  <p>协同维护：{visibleIdentityCount > 0 ? `${visibleIdentityCount} 人` : "暂无协同人"}</p>
-                  {collaboratorNames.length > 0 && <p>当前可见：{collaboratorNames.join("、")}</p>}
-                  {record.lastSubmittedByName && <p>最近填写：{record.lastSubmittedByName}</p>}
-                </>
-              )}
-            </div>
-          )}
-          {subjectHint && !compact && <p className="mt-2 text-xs leading-5 text-slate-500">{subjectHint}</p>}
-        </div>
-        {!compact && dailyTaskInfo ? (
-          <div className="flex shrink-0 flex-col items-end gap-1.5">
-            <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${status.cls}`}>{status.text}</span>
-            {record.totalItems > 0 && (
-              <span className="text-sm text-slate-400">{record.doneItems}/{record.totalItems}</span>
+      <button type="button" className={`flex w-full items-center text-left transition hover:bg-slate-50 ${compact ? "gap-2.5 p-3" : "gap-3 p-4"}`} onClick={handleToggle}>
+        {dailyTaskInfo ? (
+          /* ── 日常任务：所有字段扁平化在同一 flex 行，彻底不换行 ── */
+          <>
+            {/* 1. 日期 */}
+            <span className={`flex shrink-0 items-center gap-1 text-sm font-medium ${urgent ? "text-red-500" : "text-slate-500"}`}>
+              <Clock size={14} />{dailyTaskInfo.taskDateLabel}
+            </span>
+            {/* 2. 补录提示（仅逾期） */}
+            {record.status === "overdue" && (
+              <span className="shrink-0 text-sm font-medium text-red-500">仅支持补录前一天</span>
             )}
-          </div>
-        ) : !compact ? (
-          <div className="w-24 shrink-0">
-            <div className="h-1.5 w-full overflow-hidden rounded-full bg-slate-100">
-              <div className="h-full rounded-full bg-gradient-to-r from-blue-400 to-blue-600 transition-all" style={{ width: `${progress}%` }} />
+            {/* 3. 身份标签（跨身份任务） */}
+            {currentIdentityId && record.identityId && record.identityId !== currentIdentityId && (
+              <span className="shrink-0 rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-600">来自主播身份任务</span>
+            )}
+            {/* 4. 模板标题：flex-1 + min-w-0 + truncate，占满剩余空间并截断 */}
+            <p className={`${compact ? "text-xs" : "text-sm"} min-w-0 flex-1 truncate font-normal text-slate-400`}>（{record.assignment?.template?.title ?? "任务"}）</p>
+            {/* 5. 进度 */}
+            {record.totalItems > 0 && (
+              <span className="shrink-0 text-sm text-slate-400">{record.doneItems}/{record.totalItems}</span>
+            )}
+            {/* 6. 状态胶囊 */}
+            <span className={`shrink-0 rounded-full px-2 py-0.5 text-xs font-medium ${status.cls}`}>{status.text}</span>
+            {/* 折叠箭头 */}
+            {isExpanded ? <ChevronUp size={15} className="shrink-0 text-slate-400" /> : <ChevronDown size={15} className="shrink-0 text-slate-400" />}
+          </>
+        ) : (
+          /* ── 非日常任务：保持原结构 ── */
+          <>
+            <div className="min-w-0 flex-1">
+              <div className="mb-1.5 flex flex-wrap items-center gap-1.5">
+                {!compact && <span className={`rounded-full px-1.5 py-0.5 text-[11px] font-medium ${status.cls}`}>{status.text}</span>}
+                {!compact && <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-500">{record.assignment?.category === "DAILY" ? "日常任务" : "临时任务"}</span>}
+                {tempModeMeta && !compact && <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${tempModeMeta.badge}`}>{tempModeMeta.label}</span>}
+                {!compact && <span className={`rounded-full px-1.5 py-0.5 text-[11px] font-medium ${subjectMeta.badge}`}>{subjectMeta.label}</span>}
+                {record.subjectType === "ORG" && record.subjectOrgType && <span className={`rounded-full px-1.5 py-0.5 text-[11px] font-medium ${orgTypeMeta[record.subjectOrgType].badge}`}>{orgTypeMeta[record.subjectOrgType].label}</span>}
+              </div>
+              <p className={`${compact ? "line-clamp-2 text-sm leading-5" : "truncate text-base"} font-semibold text-slate-900`}>{record.assignment?.template?.title ?? "任务"}</p>
+              {templateDescription && (
+                <p className={`${compact ? "line-clamp-2" : "line-clamp-3"} mt-1 text-xs leading-5 text-slate-500`}>
+                  <span className="font-medium text-slate-600">说明：</span>{templateDescription}
+                </p>
+              )}
+              <div className={`mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs font-medium ${urgent ? "text-red-500" : "text-slate-500"}`}>
+                <span className="flex items-center gap-1"><Clock size={12} />{formatDeadline(record)}</span>
+                {record.totalItems > 0 && (
+                  <span>共{record.totalItems}项子任务{record.totalItems - record.doneItems > 0 ? `，未完成${record.totalItems - record.doneItems}项` : "，全部完成"}</span>
+                )}
+                {record.assignment?.category === "TEMPORARY" && <span className="max-w-full truncate">{record.subjectName ?? "未识别主体"}</span>}
+                {record.assignment?.category === "TEMPORARY" && record.assignment?.temporaryMode === "ANCHOR" && currentIdentityId && record.identityId && record.identityId !== currentIdentityId && (
+                  <span className="rounded-full bg-amber-50 px-1.5 py-0.5 text-xs font-medium text-amber-600">来自主播身份任务</span>
+                )}
+              </div>
+              {record.assignment?.category === "TEMPORARY" && compact && (
+                <div className="mt-2 text-xs font-medium leading-5 text-slate-500">
+                  <p>{isTouchTask ? "发布者账号" : "发布人"}：{publisherLabel}</p>
+                </div>
+              )}
+              {record.assignment?.category === "TEMPORARY" && !compact && (
+                <div className="mt-2 space-y-1 text-xs leading-5 text-slate-500">
+                  {isTouchTask ? (
+                    <p>发布者账号：{publisherLabel}</p>
+                  ) : (
+                    <p>发布人：{publisherLabel}{publisherPhone ? ` · ${publisherPhone}` : ""}</p>
+                  )}
+                  {record.subjectType === "USER" && <p>完成主体：当前账号（同账号任一身份完成即视为完成）</p>}
+                  {record.subjectType === "ORG" && (
+                    <>
+                      <p>协同维护：{visibleIdentityCount > 0 ? `${visibleIdentityCount} 人` : "暂无协同人"}</p>
+                      {collaboratorNames.length > 0 && <p>当前可见：{collaboratorNames.join("、")}</p>}
+                      {record.lastSubmittedByName && <p>最近填写：{record.lastSubmittedByName}</p>}
+                    </>
+                  )}
+                </div>
+              )}
+              {subjectHint && !compact && <p className="mt-2 text-xs leading-5 text-slate-500">{subjectHint}</p>}
             </div>
-            <p className="mt-1 text-right text-xs text-slate-400">{progress}%</p>
-          </div>
-        ) : null}
-        {compact && rightSlot && <div className="shrink-0">{rightSlot}</div>}
-        {expanded ? <ChevronUp size={15} className="mt-1 shrink-0 text-slate-400" /> : <ChevronDown size={15} className="mt-1 shrink-0 text-slate-400" />}
+            {!compact && (
+              <div className="w-24 shrink-0">
+                <div className="h-1.5 w-full overflow-hidden rounded-full bg-slate-100">
+                  <div className="h-full rounded-full bg-gradient-to-r from-blue-400 to-blue-600 transition-all" style={{ width: `${progress}%` }} />
+                </div>
+                <p className="mt-1 text-right text-xs text-slate-400">{progress}%</p>
+              </div>
+            )}
+            {compact && rightSlot && <div className="shrink-0">{rightSlot}</div>}
+            {isExpanded ? <ChevronUp size={15} className="mt-1 shrink-0 text-slate-400" /> : <ChevronDown size={15} className="mt-1 shrink-0 text-slate-400" />}
+          </>
+        )}
       </button>
 
-      {expanded && (
+      {isExpanded && (
         <div className={`space-y-3 border-t border-slate-100 bg-slate-50/60 ${compact ? "p-3" : "p-4"}`}>
 
           {record.status === "submitted" && <div className={`rounded-2xl px-4 py-3 text-sm ${allowSupplementAfterSubmit ? "bg-violet-50 text-violet-700" : "bg-emerald-50 text-emerald-700"}`}>{allowSupplementAfterSubmit ? "当前组织主体已完成提交，后续仍可继续补充备注或附件。多人补充内容会保留在同一条记录里。" : "任务已完成提交。"}</div>}
