@@ -476,13 +476,14 @@ export function TaskRecordCard({ record, expanded, onToggle, onRefresh, formatDe
       <button type="button" className={`flex w-full items-start text-left transition hover:bg-slate-50 ${compact ? "gap-2.5 p-3" : "items-center gap-4 p-4"}`} onClick={onToggle}>
         <div className="min-w-0 flex-1">
           {dailyTaskInfo ? (
-            /* ── 日常任务：精简信息行 ── */
-            <div className="mb-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-sm text-slate-500">
-              <span className={`flex items-center gap-1 font-medium ${urgent ? "text-red-500" : "text-slate-500"}`}>
+            /* ── 日常任务：标题与日期同一行 ── */
+            <div className="mb-1 flex flex-wrap items-center gap-x-2 gap-y-0.5">
+              <p className={`${compact ? "text-sm leading-5" : "text-base"} truncate font-semibold text-slate-900`}>{record.assignment?.template?.title ?? "任务"}</p>
+              <span className={`flex shrink-0 items-center gap-1 text-sm font-medium ${urgent ? "text-red-500" : "text-slate-500"}`}>
                 <Clock size={14} />{dailyTaskInfo.taskDateLabel}
               </span>
               {record.status === "overdue" && (
-                <span className="font-medium text-red-500">仅支持补录前一天</span>
+                <span className="text-sm font-medium text-red-500">仅支持补录前一天</span>
               )}
               {currentIdentityId && record.identityId && record.identityId !== currentIdentityId && (
                 <span className="rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-600">来自主播身份任务</span>
@@ -498,7 +499,7 @@ export function TaskRecordCard({ record, expanded, onToggle, onRefresh, formatDe
               {record.subjectType === "ORG" && record.subjectOrgType && <span className={`rounded-full px-1.5 py-0.5 text-[11px] font-medium ${orgTypeMeta[record.subjectOrgType].badge}`}>{orgTypeMeta[record.subjectOrgType].label}</span>}
             </div>
           )}
-          <p className={`${compact ? "line-clamp-2 text-sm leading-5" : "truncate text-base"} font-semibold text-slate-900`}>{record.assignment?.template?.title ?? "任务"}</p>
+          {!dailyTaskInfo && <p className={`${compact ? "line-clamp-2 text-sm leading-5" : "truncate text-base"} font-semibold text-slate-900`}>{record.assignment?.template?.title ?? "任务"}</p>}
           {!dailyTaskInfo && templateDescription && (
             <p className={`${compact ? "line-clamp-2" : "line-clamp-3"} mt-1 text-xs leading-5 text-slate-500`}>
               <span className="font-medium text-slate-600">说明：</span>{templateDescription}
