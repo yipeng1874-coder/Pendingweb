@@ -334,4 +334,63 @@ export const AssignmentController = {
       return handleAssignmentError(res, error);
     }
   },
+
+  // ─── 厅管日常任务 ────────────────────────────────────────────────────────
+  async saveHallDailyDraft(req: any, res: any) {
+    const templateId = t(req.body.templateId);
+    const orgIds = toArray(req.body.orgIds);
+    const effectMode = t(req.body.effectMode) || "immediate";
+    if (!templateId || !orgIds.length) {
+      return fail(res, "HALL_DAILY_DRAFT_REQUIRED", "请先选择表单并至少选择一个执行厅", 400);
+    }
+    if (!isEffectMode(effectMode)) {
+      return fail(res, "DAILY_EFFECT_MODE_INVALID", "生效方式不正确", 400);
+    }
+    try {
+      const result = await AssignmentService.saveHallDailyDraft({
+        assignmentId: t(req.body.assignmentId) || undefined,
+        templateId,
+        orgIds,
+        effectMode,
+        createdBy: req.userId,
+        createdByOrgId: req.identity?.orgId ?? "",
+        ownerScopePath: req.identity?.scopePath,
+        currentScopePath: req.identity?.scopePath,
+        scopeOrgId: t(req.body.scopeOrgId) || undefined,
+        createdByIdentityId: req.identity?.id,
+      });
+      return ok(res, result);
+    } catch (error: any) {
+      return handleAssignmentError(res, error);
+    }
+  },
+
+  async getHallDailyPublishPreview(req: any, res: any) {
+    try {
+      const result = await AssignmentService.getHallDailyPublishPreview(
+        req.params.id,
+        t(req.query.scopeOrgId) || undefined
+      );
+      return ok(res, result);
+    } catch (error: any) {
+      return handleAssignmentError(res, error);
+    }
+  },
+
+  async publishHallDailyDraft(req: any, res: any) {
+    const effectMode = t(req.body.effectMode) || "immediate";
+    if (!isEffectMode(effectMode)) {
+      return fail(res, "DAILY_EFFECT_MODE_INVALID", "请选择正确的生效方式", 400);
+    }
+    try {
+      const result = await AssignmentService.publishHallDailyDraft(
+        req.params.id,
+        effectMode,
+        t(req.body.scopeOrgId) || undefined
+      );
+      return ok(res, result);
+    } catch (error: any) {
+      return handleAssignmentError(res, error);
+    }
+  },
 };

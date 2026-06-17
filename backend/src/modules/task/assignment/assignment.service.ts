@@ -721,6 +721,161 @@ async function getTargetUsers(assignmentId: string) {
   return result;
 }
 
+// ─── 厅管日常任务：草稿保存 ────────────────────────────────────────────────
+async function saveHallDailyDraft(data: any) {
+  return prisma.$transaction(async (tx) => {
+    const template = await tx.taskTemplate.findUnique({ where: { id: data.templateId } });
+    if (!template) throw new Error("TEMPLATE_NOT_FOUND");
+    if (template.category !== "HALL_DAILY") throw new Error("TEMPLATE_CATEGORY_MISMATCH");
+    if (template.status === "archived") throw new Error("TEMPLATE_ARCHIVED");
+
+    const nextData = {
+      ...data,
+      createdByOrgId: data.scopeOrgId ?? data.createdByOrgId,
+      ownerScopePath: data.currentScopePath ?? data.ownerScopePath ?? null,
+    };
+
+    // 复用同一团队管理下相同模板的草稿
+    const reusableDrafts = await tx.taskAssignment.findMany({
+      where: {
+        category: "HALL_DAILY",
+        status: "draft",
+        createdBy: nextData.createdBy,
+        createdByOrgId: nextData.createdByOrgId,
+        ownerScopePath: nextData.ownerScopePath ?? null,
+      },
+      select: { id: true, templateId: true },
+      orderBy: [{ updatedAt: "desc" }, { createdAt: "desc" }],
+    });
+
+    const matchedDraft = reusableDrafts.find((item: { templateId: string }) => item.templateId === nextData.templateId);
+    let assignmentId = nextData.assignmentId || matchedDraft?.id;
+
+    if (assignmentId) {
+      const existing = await tx.taskAssignment.findUnique({ where: { id: assignmentId } });
+      if (!existing) throw new Error("ASSIGNMENT_NOT_FOUND");
+      if (existing.category !== "HALL_DAILY") throw new Error("ASSIGNMENT_CATEGORY_INVALID");
+      if (existing.status !== "draft") throw new Error("ASSIGNMENT_NOT_DRAFT");
+      await tx.taskAssignment.update({
+        where: { id: assignmentId },
+        data: {
+          templateId: nextData.templateId,
+          effectMode: nextData.effectMode ?? existing.effectMode,
+          targetRoleType: "ADMIN",
+        },
+      });
+    } else {
+      const created = await tx.taskAssignment.create({
+        data: {
+          templateId: nextData.templateId,
+          category: "HALL_DAILY",
+          status: "draft",
+          effectMode: nextData.effectMode ?? "immediate",
+          ownerScopePath: nextData.ownerScopePath ?? null,
+          targetRoleType: "ADMIN",
+          deadlinePolicy: "next_day_1600",
+          isActive: false,
+          createdBy: nextData.createdBy,
+          createdByOrgId: nextData.createdByOrgId,
+        },
+      });
+      assignmentId = created.id;
+    }
+
+    // 清理重复草稿
+    const duplicateIds = reusableDrafts.filter((item: { id: string }) => item.id !== assignmentId).map((item: { id: string }) => item.id);
+    if (duplicateIds.length) {
+      await tx.taskAssignmentExclusion.deleteMany({ where: { assignmentId: { in: duplicateIds } } });
+      await tx.taskAssignmentTarget.deleteMany({ where: { assignmentId: { in: duplicateIds } } });
+      await tx.taskAssignment.deleteMany({ where: { id: { in: duplicateIds } } });
+    }
+
+    await replaceAssignmentTargets(tx, assignmentId, nextData.orgIds ?? []);
+    return tx.taskAssignment.findUnique({ where: { id: assignmentId }, include: assignmentDetailInclude });
+  });
+}
+
+// ─── 厅管日常任务：发布预览 ───────────────────────────────────────────────
+async function getHallDailyPublishPreview(id: string, scopeOrgId?: string) {
+  const assignment = await prisma.taskAssignment.findUnique({
+    where: { id },
+    include: {
+      template: { select: { id: true, title: true, version: true, category: true, status: true } },
+      targets: { include: { org: { select: { id: true, name: true, path: true, orgType: true } } } },
+    },
+  });
+  if (!assignment) throw new Error("ASSIGNMENT_NOT_FOUND");
+  if (assignment.category !== "HALL_DAILY") throw new Error("ASSIGNMENT_CATEGORY_INVALID");
+  if (scopeOrgId && assignment.createdByOrgId !== scopeOrgId) throw new Error("ASSIGNMENT_NOT_FOUND");
+  return {
+    assignmentId: assignment.id,
+    templateId: assignment.templateId,
+    templateTitle: assignment.template?.title ?? "未命名厅管日常任务",
+    effectMode: assignment.effectMode ?? "next_midnight",
+    targetOrgCount: assignment.targets?.length ?? 0,
+    targetOrgs: (assignment.targets ?? []).map((t: any) => ({ id: t.orgId, name: t.org?.name ?? t.orgId })),
+    overlappingAssignments: [] as any[],
+  };
+}
+
+// ─── 厅管日常任务：正式发布 ───────────────────────────────────────────────
+async function publishHallDailyDraft(id: string, effectMode: "immediate" | "next_midnight", scopeOrgId?: string) {
+  return prisma.$transaction(async (tx) => {
+    const assignment = await tx.taskAssignment.findUnique({ where: { id }, include: { targets: true } });
+    if (!assignment) throw new Error("ASSIGNMENT_NOT_FOUND");
+    if (assignment.category !== "HALL_DAILY") throw new Error("ASSIGNMENT_CATEGORY_INVALID");
+    if (scopeOrgId && assignment.createdByOrgId !== scopeOrgId) throw new Error("ASSIGNMENT_NOT_FOUND");
+    if (assignment.status !== "draft") throw new Error("ASSIGNMENT_NOT_DRAFT");
+    if (!assignment.targets.length) throw new Error("ASSIGNMENT_TARGETS_REQUIRED");
+
+    const template = await ensureTemplatePublished(tx, assignment.templateId);
+    const now = new Date();
+    const effectiveAt = effectMode === "next_midnight" ? nextMidnight(now) : now;
+    const nextStatus = effectMode === "next_midnight" ? "scheduled" : "active";
+
+    if (nextStatus === "scheduled") {
+      const scheduledExists = await tx.taskAssignment.findFirst({
+        where: {
+          category: "HALL_DAILY",
+          ownerScopePath: assignment.ownerScopePath ?? null,
+          status: "scheduled",
+          id: { not: assignment.id },
+        },
+        select: { id: true },
+      });
+      if (scheduledExists) throw new Error("DAILY_SCHEDULED_EXISTS");
+    }
+
+    if (nextStatus === "active") {
+      // 结束同 ownerScopePath 下其他生效中的厅管日常任务
+      await tx.taskAssignment.updateMany({
+        where: {
+          category: "HALL_DAILY",
+          ownerScopePath: assignment.ownerScopePath ?? null,
+          status: "active",
+          id: { not: assignment.id },
+        },
+        data: { status: "ended", isActive: false, endedAt: now },
+      });
+    }
+
+    await tx.taskAssignment.update({
+      where: { id },
+      data: {
+        templateVersion: template.version,
+        effectMode,
+        effectiveAt,
+        publishedAt: now,
+        status: nextStatus,
+        endedAt: null,
+        deletedAt: null,
+        isActive: nextStatus === "active",
+      },
+    });
+    return tx.taskAssignment.findUnique({ where: { id }, include: assignmentDetailInclude });
+  });
+}
+
 export const AssignmentService = {
   list: listAssignments,
   getById: getAssignmentById,
@@ -729,6 +884,9 @@ export const AssignmentService = {
   getTemporaryPublishPreview,
   publishTemporaryDraft,
   saveDailyDraft,
+  saveHallDailyDraft,
+  getHallDailyPublishPreview,
+  publishHallDailyDraft,
   getDailyPublishPreview: async (id: string, _scopePath?: string, _roleCode?: string, scopeOrgId?: string) => {
     const assignment = await prisma.taskAssignment.findUnique({
       where: { id },

@@ -100,7 +100,7 @@ export interface ApiResponse<T> {
   error?: { code: string; message: string; details?: unknown };
 }
 
-export type TaskCategory = "DAILY" | "TEMPORARY";
+export type TaskCategory = "DAILY" | "TEMPORARY" | "HALL_DAILY";
 export type TaskItemType = "QA" | "SINGLE_CHOICE" | "MULTI_CHOICE" | "FILL_BLANK" | "LINK" | "ATTACHMENT";
 export type TaskTemplateStatus = "draft" | "published" | "archived";
 export type TaskAssignmentStatus = "draft" | "scheduled" | "active" | "ended" | "deleted";

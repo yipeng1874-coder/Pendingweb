@@ -80,6 +80,10 @@ model OrgUnit {
   feishuBaseConfigs              FeishuEnterpriseConfig[]        @relation("FeishuBaseOrg")
   feishuTeamConfigs              FeishuEnterpriseConfig[]        @relation("FeishuTeamOrg")
   dailyNotifySchedules           DailyNotifySchedule[]
+  hallTaskTemplates              HallTaskTemplate[]         @relation("HallTaskTemplateTeam")
+  hallTaskAssignments            HallTaskAssignment[]       @relation("HallTaskAssignmentTeam")
+  hallTaskAssignmentTargets      HallTaskAssignmentTarget[] @relation("HallTaskTarget")
+  hallTaskRecords                HallTaskRecord[]           @relation("HallTaskRecordHall")
 
   @@index([parentId])
   @@index([path])
@@ -522,6 +526,7 @@ enum ApplicationStatus {
 enum TaskCategory {
   DAILY
   TEMPORARY
+  HALL_DAILY
 }
 
 enum TaskTemplateStatus {
@@ -626,4 +631,183 @@ enum ReminderRepeatType {
   daily
   weekly
   workday
+}
+
+// ════════════════════════════════════════════════════════════
+// 厅管日常任务体系（独立于主播任务，以团队为管理中心）
+// ════════════════════════════════════════════════════════════
+
+/// 厅管日常任务模板（归属于 TEAM 类型组织，由团队管理员维护）
+model HallTaskTemplate {
+  id          String                 @id @default(uuid())
+  title       String
+  description String?                @db.Text
+  teamOrgId   String                 @map("team_org_id")
+  createdBy   String                 @map("created_by")
+  version     Int                    @default(1)
+  status      HallTaskTemplateStatus @default(draft)
+  createdAt   DateTime               @default(now()) @map("created_at")
+  updatedAt   DateTime               @updatedAt @map("updated_at")
+  teamOrg     OrgUnit                @relation("HallTaskTemplateTeam", fields: [teamOrgId], references: [id])
+  items       HallTaskItem[]
+  assignments HallTaskAssignment[]
+
+  @@index([teamOrgId])
+  @@index([status])
+  @@map("hall_task_templates")
+}
+
+/// 厅管日常任务模板题目
+model HallTaskItem {
+  id          String               @id @default(uuid())
+  templateId  String               @map("template_id")
+  sortOrder   Int                  @map("sort_order")
+  itemType    HallTaskItemType     @map("item_type")
+  title       String
+  isRequired  Boolean              @default(true) @map("is_required")
+  linkUrl     String?              @map("link_url")
+  template    HallTaskTemplate     @relation(fields: [templateId], references: [id])
+  options     HallTaskItemOption[]
+  itemRecords HallTaskItemRecord[]
+
+  @@index([templateId])
+  @@map("hall_task_items")
+}
+
+/// 厅管日常任务模板题目选项
+model HallTaskItemOption {
+  id         String       @id @default(uuid())
+  taskItemId String       @map("task_item_id")
+  sortOrder  Int          @map("sort_order")
+  label      String
+  taskItem   HallTaskItem @relation(fields: [taskItemId], references: [id])
+
+  @@index([taskItemId])
+  @@map("hall_task_item_options")
+}
+
+/// 厅管日常任务发布（归属于团队，目标是团队下的各个 HALL 组织）
+model HallTaskAssignment {
+  id              String                   @id @default(uuid())
+  templateId      String                   @map("template_id")
+  teamOrgId       String                   @map("team_org_id")
+  status          HallTaskAssignmentStatus @default(draft)
+  effectMode      HallTaskEffectMode       @default(immediate) @map("effect_mode")
+  effectiveAt     DateTime?                @map("effective_at")
+  publishedAt     DateTime?                @map("published_at")
+  endedAt         DateTime?                @map("ended_at")
+  createdBy       String                   @map("created_by")
+  createdByOrgId  String                   @map("created_by_org_id")
+  createdAt       DateTime                 @default(now()) @map("created_at")
+  updatedAt       DateTime                 @updatedAt @map("updated_at")
+  template        HallTaskTemplate         @relation(fields: [templateId], references: [id])
+  teamOrg         OrgUnit                  @relation("HallTaskAssignmentTeam", fields: [teamOrgId], references: [id])
+  targets         HallTaskAssignmentTarget[]
+  records         HallTaskRecord[]
+
+  @@index([templateId])
+  @@index([teamOrgId, status])
+  @@index([createdAt])
+  @@map("hall_task_assignments")
+}
+
+/// 厅管日常任务发布目标（具体的 HALL 组织）
+model HallTaskAssignmentTarget {
+  id              String             @id @default(uuid())
+  assignmentId    String             @map("assignment_id")
+  hallOrgId       String             @map("hall_org_id")
+  createdAt       DateTime           @default(now()) @map("created_at")
+  assignment      HallTaskAssignment @relation(fields: [assignmentId], references: [id])
+  hallOrg         OrgUnit            @relation("HallTaskTarget", fields: [hallOrgId], references: [id])
+
+  @@unique([assignmentId, hallOrgId])
+  @@index([assignmentId])
+  @@index([hallOrgId])
+  @@map("hall_task_assignment_targets")
+}
+
+/// 厅管日常任务执行记录（主体是 HALL 组织，每日一条）
+model HallTaskRecord {
+  id             String               @id @default(uuid())
+  assignmentId   String               @map("assignment_id")
+  hallOrgId      String               @map("hall_org_id")
+  recordDate     String               @map("record_date")
+  status         HallTaskRecordStatus @default(pending)
+  totalItems     Int                  @default(0) @map("total_items")
+  doneItems      Int                  @default(0) @map("done_items")
+  submittedAt    DateTime?            @map("submitted_at")
+  submittedBy    String?              @map("submitted_by")
+  createdAt      DateTime             @default(now()) @map("created_at")
+  updatedAt      DateTime             @updatedAt @map("updated_at")
+  assignment     HallTaskAssignment   @relation(fields: [assignmentId], references: [id])
+  hallOrg        OrgUnit              @relation("HallTaskRecordHall", fields: [hallOrgId], references: [id])
+  itemRecords    HallTaskItemRecord[]
+
+  @@unique([assignmentId, hallOrgId, recordDate])
+  @@index([assignmentId])
+  @@index([hallOrgId])
+  @@index([recordDate])
+  @@map("hall_task_records")
+}
+
+/// 厅管日常任务题目作答记录
+model HallTaskItemRecord {
+  id              String                 @id @default(uuid())
+  taskRecordId    String                 @map("task_record_id")
+  taskItemId      String                 @map("task_item_id")
+  status          HallTaskItemRecordStatus @default(pending)
+  answerText      String?                @map("answer_text") @db.Text
+  answerOptions   Json?                  @map("answer_options")
+  isLinkConfirmed Boolean                @default(false) @map("is_link_confirmed")
+  doneAt          DateTime?              @map("done_at")
+  doneBy          String?                @map("done_by")
+  createdAt       DateTime               @default(now()) @map("created_at")
+  updatedAt       DateTime               @updatedAt @map("updated_at")
+  taskRecord      HallTaskRecord         @relation(fields: [taskRecordId], references: [id])
+  taskItem        HallTaskItem           @relation(fields: [taskItemId], references: [id])
+
+  @@unique([taskRecordId, taskItemId])
+  @@index([taskRecordId])
+  @@index([taskItemId])
+  @@map("hall_task_item_records")
+}
+
+enum HallTaskTemplateStatus {
+  draft
+  published
+  archived
+}
+
+enum HallTaskItemType {
+  QA
+  SINGLE_CHOICE
+  MULTI_CHOICE
+  FILL_BLANK
+  LINK
+  ATTACHMENT
+}
+
+enum HallTaskAssignmentStatus {
+  draft
+  scheduled
+  active
+  ended
+  deleted
+}
+
+enum HallTaskEffectMode {
+  immediate
+  next_midnight
+}
+
+enum HallTaskRecordStatus {
+  pending
+  in_progress
+  submitted
+  overdue
+}
+
+enum HallTaskItemRecordStatus {
+  pending
+  done
 }

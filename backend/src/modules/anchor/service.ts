@@ -184,9 +184,9 @@ export const AnchorService = {
       : isAdmin
         ? ["HQ", "BASE"]
         : input.roleCode === "BASE_ADMIN"
-          ? ["TEAM"]
+          ? ["BASE", "TEAM"]
           : input.roleCode === "TEAM_ADMIN"
-            ? ["HALL"]
+            ? ["TEAM", "HALL"]
             : input.roleCode === "HALL_MANAGER"
               ? ["HALL"]
               : ["BASE", "TEAM", "HALL"];
@@ -198,6 +198,12 @@ export const AnchorService = {
         : null
       : null;
 
+    // BASE_ADMIN / TEAM_ADMIN 根节点查询：同时返回自身节点（id匹配）和直属下级（parentId匹配）
+    const scopedRootWhere: Prisma.OrgUnitWhereInput | null =
+      !parent && input.identityOrgId && (input.roleCode === "BASE_ADMIN" || input.roleCode === "TEAM_ADMIN")
+        ? { OR: [{ id: input.identityOrgId }, { parentId: input.identityOrgId }] }
+        : null;
+
     const where: Prisma.OrgUnitWhereInput = {
       status: "active",
       orgType: { in: allowedTypes },
@@ -205,9 +211,11 @@ export const AnchorService = {
         ? { parentId: parent.id }
         : rootWhere
           ? rootWhere
-          : input.identityOrgId
-            ? { parentId: input.identityOrgId }
-            : { depth: { lte: 2 } }),
+          : scopedRootWhere
+            ? scopedRootWhere
+            : input.identityOrgId
+              ? { parentId: input.identityOrgId }
+              : { depth: { lte: 2 } }),
       ...(!isAdmin && scopePath ? { path: { startsWith: scopePath } } : {}),
     };
 
@@ -337,7 +345,20 @@ export const AnchorService = {
       : null;
     const selectedScopePath = selectedOrg?.path;
     const effectiveScopePath = selectedScopePath || (input.roleCode !== "DEV_ADMIN" ? input.scopePath : undefined);
-    const hallFilter = effectiveScopePath ? { hallOrg: { path: { startsWith: effectiveScopePath } } } : {};
+
+    // 修复：若选中的是"厅"（叶子节点），直接精确匹配 hallOrgId，
+    // 避免 path 前缀模糊匹配把编码相似的兄弟厅的主播也抓出来。
+    // 对上级节点（基地/团队）则在路径末尾追加 "/" 确保只匹配真正的子孙，防止前缀冲突。
+    let hallFilter: Prisma.AnchorProfileWhereInput = {};
+    if (selectedOrg?.orgType === "HALL") {
+      hallFilter = { hallOrgId: selectedOrg.id };
+    } else if (effectiveScopePath) {
+      hallFilter = {
+        hallOrg: {
+          path: { startsWith: effectiveScopePath.endsWith("/") ? effectiveScopePath : `${effectiveScopePath}/` },
+        },
+      };
+    }
     const where: Prisma.AnchorProfileWhereInput = {
       ...hallFilter,
       ...(input.hallOrgId ? { hallOrgId: input.hallOrgId } : {}),

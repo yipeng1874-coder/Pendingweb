@@ -429,7 +429,7 @@ export function TaskDashboardPage() {
         </div>
         <div className="flex items-center gap-2">
           <div className="inline-flex items-center rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-sm font-bold text-amber-700">
-            今日关注 {countTodayFocusedDailyRecords(records)} 件
+            今日待办 {countTodayFocusedDailyRecords(records)} 件
           </div>
           <button type="button" onClick={() => void load()} disabled={loading} className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-sm font-semibold text-slate-600 transition hover:bg-slate-50 disabled:opacity-50"><RefreshCw size={13} className={loading ? "animate-spin" : ""} />刷新</button>
         </div>

@@ -22,3 +22,8 @@ assignmentRoutes.patch("/tasks/assignments/:id", permissionRequired("task:assign
 assignmentRoutes.delete("/tasks/assignments/:id", permissionRequired("task:assignment:manage"), AssignmentController.remove);
 assignmentRoutes.post("/tasks/assignments/:id/close", permissionRequired("task:assignment:manage"), AssignmentController.close);
 assignmentRoutes.post("/tasks/assignments/:id/reopen", permissionRequired("task:assignment:manage"), AssignmentController.reopen);
+
+// 厅管日常任务专属路由（TEAM_ADMIN 及以上权限）
+assignmentRoutes.post("/tasks/assignments/hall-daily-drafts", permissionRequired("task:assignment:manage"), AssignmentController.saveHallDailyDraft);
+assignmentRoutes.get("/tasks/assignments/:id/hall-daily-preview", permissionRequired("task:assignment:view"), AssignmentController.getHallDailyPublishPreview);
+assignmentRoutes.post("/tasks/assignments/:id/hall-daily-publish", permissionRequired("task:assignment:manage"), AssignmentController.publishHallDailyDraft);

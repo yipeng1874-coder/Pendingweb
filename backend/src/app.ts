@@ -17,6 +17,7 @@ import { notifyRoutes } from "./modules/task/notify/notify.routes.js";
 import { temporaryNotifyScheduleRoutes } from "./modules/task/notify/temporary-notify-schedule.routes.js";
 import { workflowTaskRoutes } from "./modules/task/collaboration/workflow.routes.js";
 import { broadcastTaskRoutes } from "./modules/task/collaboration/broadcast.routes.js";
+import { hallDailyRoutes } from "./modules/task/hall-daily/hall-daily.routes.js";
 import { fail } from "./shared/response.js";
 
 export function createApp() {
@@ -47,6 +48,7 @@ export function createApp() {
   app.use("/api", temporaryNotifyScheduleRoutes);
   app.use("/api", workflowTaskRoutes);
   app.use("/api", broadcastTaskRoutes);
+  app.use("/api", hallDailyRoutes);
 
   app.use((_req, res) => fail(res, "NOT_FOUND", "接口不存在", 404));
   return app;

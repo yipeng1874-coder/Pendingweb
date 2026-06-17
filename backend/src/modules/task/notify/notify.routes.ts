@@ -206,6 +206,8 @@ async function sendFeishuBatchMessage(config: FeishuConfigRecord, openIds: strin
 }
 
 async function buildDailyNotifyAudience(taskDate: string, baseOrg: { id: string; path: string }) {
+  // 标准化日期格式，防止前端传 2026/06/17 等斜杠格式导致数据库查询返回空结果
+  const normalizedDate = taskDate.replace(/\//g, "-");
   await reconcileDailyAssignments(baseOrg.path);
   const assignments = await prisma.taskAssignment.findMany({
     where: {
@@ -213,8 +215,8 @@ async function buildDailyNotifyAudience(taskDate: string, baseOrg: { id: string;
       targets: { some: { orgId: baseOrg.id } },
       status: { in: ["scheduled", "active", "ended"] },
       deletedAt: null,
-      effectiveAt: { lte: getDailyTaskSupplementDeadline(taskDate) },
-      OR: [{ endedAt: null }, { endedAt: { gte: getDailyTaskDayEnd(taskDate) } }],
+      effectiveAt: { lte: getDailyTaskSupplementDeadline(normalizedDate) },
+      OR: [{ endedAt: null }, { endedAt: { gte: getDailyTaskDayEnd(normalizedDate) } }],
     },
     include: {
       targets: true,
@@ -229,44 +231,58 @@ async function buildDailyNotifyAudience(taskDate: string, baseOrg: { id: string;
     orderBy: [{ effectiveAt: "desc" }, { publishedAt: "desc" }, { createdAt: "desc" }],
   });
 
-  const requiredCountMap = new Map<string, number>();
-  const refs = new Map<string, { assignmentId: string; userId: string; subjectKey: string; requiredTotalItems: number }>();
+  // 与看板完全对齐：同一 subjectKey 只取第一个匹配的 assignment（按排序优先级，effectiveAt desc）
+  // 这样可以确保 recordMap 查询时 assignmentId 与实际打卡记录对应
+  const resolvedSubjectKeys = new Set<string>();
+  const refs: Array<{ assignmentId: string; userId: string; subjectKey: string; requiredTotalItems: number }> = [];
+  const assignmentIds = new Set<string>();
 
   for (const assignment of assignments) {
-    requiredCountMap.set(assignment.id, assignment.template?.items?.filter((item: any) => item.isRequired !== false).length ?? 0);
+    const requiredTotalItems = assignment.template?.items?.filter((item: any) => item.isRequired !== false).length ?? 0;
     const audience = await listAssignmentAudienceMembers(prisma, assignment as any);
     for (const member of audience) {
-      const key = `${assignment.id}:${member.subjectKey}:${member.userId}:${taskDate}`;
-      if (refs.has(key)) continue;
-      refs.set(key, {
+      // 与看板一致：同一 subjectKey 在当天只绑定到第一个 assignment，后续跳过
+      if (resolvedSubjectKeys.has(member.subjectKey)) continue;
+      resolvedSubjectKeys.add(member.subjectKey);
+      assignmentIds.add(assignment.id);
+      refs.push({
         assignmentId: assignment.id,
         userId: member.userId,
         subjectKey: member.subjectKey,
-        requiredTotalItems: requiredCountMap.get(assignment.id) ?? 0,
+        requiredTotalItems,
       });
     }
   }
 
   const records = await prisma.taskRecord.findMany({
     where: {
-      assignmentId: { in: Array.from(new Set(Array.from(refs.values()).map((item) => item.assignmentId))) },
-      recordDate: taskDate,
+      assignmentId: { in: Array.from(assignmentIds) },
+      recordDate: normalizedDate,
     },
     select: {
       id: true,
       assignmentId: true,
-      userId: true,
       subjectKey: true,
       recordDate: true,
       doneItems: true,
       status: true,
       assignment: { select: { category: true } },
+      itemRecords: {
+        select: {
+          status: true,
+          taskItem: { select: { isRequired: true } },
+        },
+      },
+      exemption: { select: { status: true } },
     },
   });
-  const recordMap = new Map(records.map((record) => [`${record.assignmentId}:${record.subjectKey}:${taskDate}`, record]));
+  // Key 格式与看板完全对齐：assignmentId:subjectKey:YYYY-MM-DD
+  const recordMap = new Map(
+    records.filter((r) => r.subjectKey).map((record) => [`${record.assignmentId}:${record.subjectKey}:${normalizedDate}`, record])
+  );
 
   const users = await prisma.user.findMany({
-    where: { id: { in: Array.from(new Set(Array.from(refs.values()).map((item) => item.userId))) }, status: "active" },
+    where: { id: { in: Array.from(new Set(refs.map((item) => item.userId))) }, status: "active" },
     select: {
       id: true,
       nickname: true,
@@ -279,26 +295,45 @@ async function buildDailyNotifyAudience(taskDate: string, baseOrg: { id: string;
   const userMap = new Map(users.map((user) => [user.id, user]));
   const aggregateMap = new Map<string, NotifyAudienceRow>();
 
-  for (const ref of refs.values()) {
+  for (const ref of refs) {
     const user = userMap.get(ref.userId);
     if (!user) continue;
-    const record = recordMap.get(`${ref.assignmentId}:${ref.subjectKey}:${taskDate}`);
-    const status = resolveTaskRecordStatus(
-      {
-        assignment: record?.assignment,
-        recordDate: taskDate,
-        doneItems: record?.doneItems ?? 0,
-        status: record?.status ?? "pending",
-      },
-      new Date()
-    );
-    if (status !== "pending" && status !== "in_progress") continue;
+    const record = recordMap.get(`${ref.assignmentId}:${ref.subjectKey}:${normalizedDate}`);
+
+    // 被免除的任务，不纳入通知（与看板逻辑对齐）
+    if (record?.exemption?.status === "approved" || record?.exemption?.status === "pending") continue;
 
     const totalCount = Math.max(ref.requiredTotalItems, 0);
-    const doneItems = Math.max(record?.doneItems ?? 0, 0);
-    const incompleteCount = Math.max(totalCount - doneItems, 1);
-    const aggregateKey = user.id;
-    const existing = aggregateMap.get(aggregateKey);
+
+    // 与看板 resolveDailyDashboardStatus 完全对齐：实时计算必填项完成数
+    const requiredDoneItems = record?.itemRecords
+      ? record.itemRecords.filter((ir: any) => ir.status === "done" && ir.taskItem?.isRequired !== false).length
+      : 0;
+
+    // 必填项全部完成，视为已完成，跳过通知（与看板判定逻辑完全一致）
+    if (totalCount > 0 && requiredDoneItems >= totalCount) continue;
+
+    // totalCount=0 时（无必填子任务），检查数据库状态兜底
+    if (totalCount === 0) {
+      const dbStatus = resolveTaskRecordStatus(
+        {
+          assignment: record?.assignment,
+          recordDate: normalizedDate,
+          doneItems: record?.doneItems ?? 0,
+          status: record?.status ?? "pending",
+        },
+        new Date()
+      );
+      if (dbStatus !== "pending" && dbStatus !== "in_progress") continue;
+    }
+
+    // 计算未完成数：totalCount=0 时以 1 计，表示整条任务未完成；否则按实际差值
+    const incompleteCount = totalCount > 0 ? Math.max(totalCount - requiredDoneItems, 0) : 1;
+    if (incompleteCount === 0) continue;
+
+    // 确定通知状态标签（用于前端统计展示）
+    const status: "pending" | "in_progress" = requiredDoneItems > 0 ? "in_progress" : "pending";
+    const existing = aggregateMap.get(user.id);
 
     if (existing) {
       existing.totalCount += totalCount;
@@ -309,7 +344,7 @@ async function buildDailyNotifyAudience(taskDate: string, baseOrg: { id: string;
       continue;
     }
 
-    aggregateMap.set(aggregateKey, {
+    aggregateMap.set(user.id, {
       userId: user.id,
       nickname: user.nickname,
       phone: user.phone,
@@ -390,30 +425,41 @@ export async function executeDailyNotifySend(taskDate: string, baseOrg: BaseScop
       continue;
     }
 
-    const openIds = Array.from(new Set(bucket.map((item) => item.feishuOpenId!).filter(Boolean)));
-    const totalCount = bucket.reduce((sum, item) => sum + item.totalCount, 0);
-    const incompleteCount = bucket.reduce((sum, item) => sum + item.incompleteCount, 0);
-    const text = `${prefix}，日常任务共 ${totalCount} 项，您还有 ${incompleteCount} 项未完成。`;
-    try {
-      const sendResult = await sendFeishuBatchMessage(config, openIds, text);
-      results.push({
-        feishuConfigId,
-        configName: config.name,
-        targetCount: openIds.length,
-        successCount: Math.max(openIds.length - sendResult.invalidOpenIds.length, 0),
-        invalidOpenIds: sendResult.invalidOpenIds,
-        messageId: sendResult.messageId,
-      });
-    } catch (error: any) {
-      results.push({
-        feishuConfigId,
-        configName: config.name,
-        targetCount: openIds.length,
-        successCount: 0,
-        invalidOpenIds: [],
-        messageId: null,
-        error: error?.message ?? "飞书发送失败",
-      });
+    // 按"总数+未完成数"分组，保证同一批次内每人数值相同
+    const groupMap = new Map<string, { openIds: string[]; totalCount: number; incompleteCount: number }>();
+    for (const item of bucket) {
+      if (!item.feishuOpenId) continue;
+      const groupKey = `${item.totalCount}_${item.incompleteCount}`;
+      if (!groupMap.has(groupKey)) {
+        groupMap.set(groupKey, { openIds: [], totalCount: item.totalCount, incompleteCount: item.incompleteCount });
+      }
+      groupMap.get(groupKey)!.openIds.push(item.feishuOpenId);
+    }
+
+    for (const { openIds, totalCount, incompleteCount } of groupMap.values()) {
+      const uniqueOpenIds = Array.from(new Set(openIds));
+      const text = `${prefix}，日常任务共 ${totalCount} 项，您还有 ${incompleteCount} 项未完成。`;
+      try {
+        const sendResult = await sendFeishuBatchMessage(config, uniqueOpenIds, text);
+        results.push({
+          feishuConfigId,
+          configName: config.name,
+          targetCount: uniqueOpenIds.length,
+          successCount: Math.max(uniqueOpenIds.length - sendResult.invalidOpenIds.length, 0),
+          invalidOpenIds: sendResult.invalidOpenIds,
+          messageId: sendResult.messageId,
+        });
+      } catch (error: any) {
+        results.push({
+          feishuConfigId,
+          configName: config.name,
+          targetCount: uniqueOpenIds.length,
+          successCount: 0,
+          invalidOpenIds: [],
+          messageId: null,
+          error: error?.message ?? "飞书发送失败",
+        });
+      }
     }
   }
 

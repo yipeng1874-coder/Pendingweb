@@ -32,6 +32,7 @@ const taskBoardSubItems = [
 
 const issueSubItems = [
   { to: "/tasks/templates/daily-library", label: "主播日常任务", icon: ClipboardCheck },
+  { to: "/tasks/issue/hall-daily", label: "厅管日常任务", icon: Building2 },
   { to: "/tasks/issue/temporary", label: "临时任务", icon: CalendarClock },
   { to: "/tasks/collaboration/workflow", label: "协同任务", icon: GitBranch },
 ];
@@ -286,6 +287,9 @@ function TaskIssueNavGroup({ collapsed, onExpandRequest }: { collapsed: boolean;
     if (item.to === "/tasks/templates/daily-library") {
       return Boolean(currentRoleCode && ["DEV_ADMIN", "HQ_ADMIN", "BASE_ADMIN"].includes(currentRoleCode))
         && (permissions.includes("*") || permissions.includes("task:template:manage") || permissions.includes("task:assignment:manage"));
+    }
+    if (item.to === "/tasks/issue/hall-daily") {
+      return Boolean(currentRoleCode && ["DEV_ADMIN", "HQ_ADMIN", "BASE_ADMIN", "TEAM_ADMIN"].includes(currentRoleCode));
     }
     if (item.to === "/tasks/issue/temporary") {
       return Boolean(currentRoleCode && ["DEV_ADMIN", "HQ_ADMIN", "BASE_ADMIN", "TEAM_ADMIN"].includes(currentRoleCode));

@@ -25,17 +25,29 @@ interface AnchorAccountDrawerProps {
 interface CascadeHallPickerProps {
   orgs: OrgUnit[];
   hallOrgId: string;
+  hallOrg?: OrgUnit;   // 当前厅的完整对象，用于反查上级（orgs 中不含 HALL 节点）
   onChange: (hallOrgId: string) => void;
 }
 
-function CascadeHallPicker({ orgs, hallOrgId, onChange, disabled = false }: CascadeHallPickerProps & { disabled?: boolean }) {
-  const bases = orgs.filter((o) => o.orgType === "BASE" && o.status === "active");
-
-  // 根据当前 hallOrgId 反查初始 baseId / teamId
+function CascadeHallPicker({ orgs, hallOrgId, hallOrg, onChange, disabled = false }: CascadeHallPickerProps & { disabled?: boolean }) {
+  // 根据当前 hallOrg 反查初始 baseId / teamId
   function resolveInitial() {
-    const hall = orgs.find((o) => o.id === hallOrgId);
-    if (!hall) return { baseId: "", teamId: "" };
-    const team = hall.parentId ? orgs.find((o) => o.id === hall.parentId) : undefined;
+    if (!hallOrg) return { baseId: "", teamId: "" };
+
+    // 优先通过 path 解析（格式: /baseId/teamId/hallId），不依赖 orgs 是否已加载父节点
+    if (hallOrg.path) {
+      const parts = hallOrg.path.split("/").filter(Boolean);
+      const hallIdx = parts.indexOf(hallOrg.id);
+      if (hallIdx >= 2) {
+        return { baseId: parts[hallIdx - 2], teamId: parts[hallIdx - 1] };
+      }
+      if (parts.length >= 3) {
+        return { baseId: parts[0], teamId: parts[1] };
+      }
+    }
+
+    // 备选：通过 parentId 链路反查（依赖 orgs 包含这些节点）
+    const team = hallOrg.parentId ? orgs.find((o) => o.id === hallOrg.parentId) : undefined;
     const base = team?.parentId ? orgs.find((o) => o.id === team.parentId) : undefined;
     return { baseId: base?.id ?? "", teamId: team?.id ?? "" };
   }
@@ -44,15 +56,27 @@ function CascadeHallPicker({ orgs, hallOrgId, onChange, disabled = false }: Casc
   const [baseId, setBaseId] = useState(initial.baseId);
   const [teamId, setTeamId] = useState(initial.teamId);
 
-  // 当 hallOrgId 切换（打开不同抽屉）时重新初始化
+  // 仅当 hallOrg 整体切换（打开不同主播的抽屉）时才重新初始化
+  // 不监听 hallOrgId，避免用户手动选厅后触发 baseId/teamId 被重置
   useEffect(() => {
     const { baseId: b, teamId: t } = resolveInitial();
     setBaseId(b);
     setTeamId(t);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hallOrgId]);
+  }, [hallOrg]);
+
+  const bases = orgs.filter((o) => o.orgType === "BASE" && o.status === "active");
+
+  // 当 bases 只有一个且尚未选中（如基地管理员身份），自动定位到该基地
+  useEffect(() => {
+    if (!baseId && bases.length === 1) {
+      setBaseId(bases[0].id);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bases.length]);
 
   const teams = orgs.filter((o) => o.orgType === "TEAM" && o.parentId === baseId && o.status === "active");
+
   const [dynamicHalls, setDynamicHalls] = useState<OrgUnit[]>([]);
 
   // 当 teamId 变化时加载厅（包含虚拟厅）
@@ -206,6 +230,7 @@ export function AnchorAccountDrawer({
               <CascadeHallPicker
                 orgs={orgs}
                 hallOrgId={editing.hallOrgId}
+                hallOrg={editing.hallOrg}
                 disabled={readOnly}
                 onChange={(hallOrgId) => onChange({ ...editing, hallOrgId })}
               />

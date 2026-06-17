@@ -227,6 +227,18 @@ export const assignmentApi = {
   }) => api.post<TaskAssignment>("/tasks/assignments/daily-drafts", data),
   getDailyPublishPreview: (id: string, params?: ScopeParams) => api.get<DailyPublishPreview>(`/tasks/assignments/${id}/publish-preview${buildQuery(params)}`),
   publishDailyDraft: (id: string, effectMode: TaskEffectMode, scopeOrgId?: string) => api.post<TaskAssignment>(`/tasks/assignments/${id}/publish`, { effectMode, scopeOrgId }),
+  // 厅管日常任务专属 API
+  saveHallDailyDraft: (data: {
+    assignmentId?: string;
+    templateId: string;
+    orgIds: string[];
+    effectMode?: TaskEffectMode;
+    scopeOrgId?: string;
+  }) => api.post<TaskAssignment>("/tasks/assignments/hall-daily-drafts", data),
+  getHallDailyPublishPreview: (id: string, params?: ScopeParams) =>
+    api.get<{ assignmentId: string; templateId: string; templateTitle: string; effectMode: TaskEffectMode; targetOrgCount: number; targetOrgs: { id: string; name: string }[]; overlappingAssignments: unknown[] }>(`/tasks/assignments/${id}/hall-daily-preview${buildQuery(params)}`),
+  publishHallDailyDraft: (id: string, effectMode: TaskEffectMode, scopeOrgId?: string) =>
+    api.post<TaskAssignment>(`/tasks/assignments/${id}/hall-daily-publish`, { effectMode, scopeOrgId }),
   update: (
     id: string,
     data: {
@@ -322,6 +334,91 @@ export const notifyApi = {
     api.get<TemporaryNotifySchedule>("/tasks/notify/temporary-schedule"),
   saveTemporaryNotifySchedule: (data: Partial<TemporaryNotifySchedule>) =>
     api.put<TemporaryNotifySchedule>("/tasks/notify/temporary-schedule", data),
+};
+
+// ─── 厅管日常任务独立 API（对接 /api/hall-daily/* 路由） ─────────────────────
+
+export type HallTaskTemplate = {
+  id: string;
+  title: string;
+  description?: string;
+  teamOrgId: string;
+  createdBy: string;
+  version: number;
+  status: "draft" | "published" | "archived";
+  createdAt: string;
+  updatedAt: string;
+  items: Array<{
+    id: string;
+    templateId: string;
+    sortOrder: number;
+    itemType: string;
+    title: string;
+    isRequired: boolean;
+    linkUrl?: string | null;
+    options: Array<{ id: string; sortOrder: number; label: string }>;
+  }>;
+  _count?: { assignments: number };
+};
+
+export type HallTaskAssignment = {
+  id: string;
+  templateId: string;
+  teamOrgId: string;
+  status: "draft" | "scheduled" | "active" | "ended" | "deleted";
+  effectMode: "immediate" | "next_midnight";
+  effectiveAt?: string | null;
+  publishedAt?: string | null;
+  endedAt?: string | null;
+  createdBy: string;
+  createdByOrgId: string;
+  createdAt: string;
+  updatedAt: string;
+  template?: { id: string; title: string; status: string };
+  targets?: Array<{ id: string; hallOrgId: string; hallOrg: { id: string; name: string } }>;
+  _count?: { records: number };
+};
+
+export const hallDailyApi = {
+  // ── 模板 ──
+  listTemplates: (params?: { teamOrgId?: string; status?: string; limit?: number; offset?: number }) =>
+    api.get<HallTaskTemplate[]>(`/hall-daily/templates${buildQuery(params)}`),
+  getTemplateById: (id: string, teamOrgId?: string) =>
+    api.get<HallTaskTemplate>(`/hall-daily/templates/${id}${buildQuery({ teamOrgId })}`),
+  createTemplate: (data: { title: string; description?: string; teamOrgId: string; items: unknown[] }) =>
+    api.post<HallTaskTemplate>("/hall-daily/templates", data),
+  updateTemplate: (id: string, data: unknown, teamOrgId?: string) =>
+    api.patch<HallTaskTemplate>(`/hall-daily/templates/${id}${buildQuery({ teamOrgId })}`, data),
+  deleteTemplate: (id: string, teamOrgId?: string) =>
+    api.delete<{ deleted: boolean; id: string }>(`/hall-daily/templates/${id}${buildQuery({ teamOrgId })}`),
+  copyTemplate: (id: string, teamOrgId?: string) =>
+    api.post<HallTaskTemplate>(`/hall-daily/templates/${id}/copy${buildQuery({ teamOrgId })}`),
+  publishTemplate: (id: string, teamOrgId?: string) =>
+    api.post<HallTaskTemplate>(`/hall-daily/templates/${id}/publish${buildQuery({ teamOrgId })}`),
+  archiveTemplate: (id: string, teamOrgId?: string) =>
+    api.post<HallTaskTemplate>(`/hall-daily/templates/${id}/archive${buildQuery({ teamOrgId })}`),
+
+  // ── 发布任务 ──
+  listAssignments: (params?: { teamOrgId?: string; status?: string; limit?: number; offset?: number }) =>
+    api.get<HallTaskAssignment[]>(`/hall-daily/assignments${buildQuery(params)}`),
+  saveDraft: (data: { assignmentId?: string; templateId: string; teamOrgId: string; hallOrgIds: string[]; effectMode?: string }) =>
+    api.post<HallTaskAssignment>("/hall-daily/assignments/draft", data),
+  getPublishPreview: (id: string, teamOrgId?: string) =>
+    api.get<{
+      assignmentId: string;
+      templateId: string;
+      templateTitle: string;
+      effectMode: string;
+      targetOrgCount: number;
+      targetOrgs: { id: string; name: string }[];
+      overlappingAssignments: Array<{ id: string; title: string; status: string }>;
+    }>(`/hall-daily/assignments/${id}/preview${buildQuery({ teamOrgId })}`),
+  publishDraft: (id: string, effectMode: string, teamOrgId?: string) =>
+    api.post<HallTaskAssignment>(`/hall-daily/assignments/${id}/publish`, { effectMode, teamOrgId }),
+  closeAssignment: (id: string, teamOrgId?: string) =>
+    api.post<HallTaskAssignment>(`/hall-daily/assignments/${id}/close`, { teamOrgId }),
+  deleteAssignment: (id: string, teamOrgId?: string) =>
+    api.delete<{ deleted: boolean; id: string }>(`/hall-daily/assignments/${id}${buildQuery({ teamOrgId })}`),
 };
 
 export const reportApi = {

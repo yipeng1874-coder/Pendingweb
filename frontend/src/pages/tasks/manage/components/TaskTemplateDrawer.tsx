@@ -2,11 +2,11 @@ import { useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import { AlignLeft, CheckSquare, Circle, ExternalLink, FileImage, GripVertical, Plus, Trash2, X } from "lucide-react";
 import type { TaskItemType, TaskTemplate } from "../../../../types";
-import { templateApi } from "../../../../services/task";
+import { hallDailyApi, templateApi } from "../../../../services/task";
 import { isLearningLinkValid, normalizeLearningLink } from "../../../../shared/utils/learningLink";
 
 
-type TaskCategory = "DAILY" | "TEMPORARY";
+type TaskCategory = "DAILY" | "TEMPORARY" | "HALL_DAILY";
 
 type DraftItem = {
   id: string;
@@ -18,16 +18,34 @@ type DraftItem = {
   options: { sortOrder: number; label: string }[];
 };
 
+type TemplateItem = {
+  id: string;
+  sortOrder: number;
+  itemType: TaskItemType | string;
+  title: string;
+  isRequired: boolean;
+  linkUrl?: string | null;
+  options?: Array<{ id?: string; sortOrder: number; label: string }>;
+};
+
+type AnyTemplate = {
+  id: string;
+  title: string;
+  description?: string;
+  status: string;
+  items?: TemplateItem[];
+};
+
 type Props = {
   open: boolean;
   category: TaskCategory;
   currentOrgId: string;
   scopeOrgId?: string;
-  template?: TaskTemplate | null;
+  template?: AnyTemplate | null;
   readOnly?: boolean;
   onClose: () => void;
-  onSaved: (template: TaskTemplate) => void | Promise<void>;
-  onSavedAndNext?: (template: TaskTemplate) => void | Promise<void>;
+  onSaved: (template: any) => void | Promise<void>;
+  onSavedAndNext?: (template: any) => void | Promise<void>;
 };
 
 const itemTypeOptions: { value: TaskItemType; label: string; icon: ReactNode; desc: string }[] = [
@@ -144,7 +162,7 @@ export function TaskTemplateDrawer({ open, category, currentOrgId, scopeOrgId, t
       (template?.items ?? []).map((item, index) => ({
         id: item.id,
         sortOrder: index,
-        itemType: item.itemType,
+        itemType: item.itemType as TaskItemType,
         title: item.title,
         isRequired: item.isRequired,
         linkUrl: item.linkUrl ?? undefined,
@@ -203,9 +221,20 @@ export function TaskTemplateDrawer({ open, category, currentOrgId, scopeOrgId, t
       items: normalizedItems,
     };
     try {
-      const saved = template?.status === "draft"
-        ? await templateApi.update(template.id, payload, scopeOrgId ? { scopeOrgId } : undefined)
-        : await templateApi.create({ ...payload, category, orgId: resolvedTemplateOrgId, scopeOrgId });
+      let saved: any;
+      if (category === "HALL_DAILY") {
+        // 厅管日常任务走独立的 hall-daily 接口，teamOrgId = scopeOrgId
+        const teamOrgId = scopeOrgId || currentOrgId;
+        if (template?.status === "draft") {
+          saved = await hallDailyApi.updateTemplate(template.id, payload, teamOrgId);
+        } else {
+          saved = await hallDailyApi.createTemplate({ ...payload, teamOrgId });
+        }
+      } else {
+        saved = template?.status === "draft"
+          ? await templateApi.update(template.id, payload, scopeOrgId ? { scopeOrgId } : undefined)
+          : await templateApi.create({ ...payload, category, orgId: resolvedTemplateOrgId, scopeOrgId });
+      }
       if (proceedToNext && onSavedAndNext) {
         await onSavedAndNext(saved);
       } else {
@@ -228,7 +257,11 @@ export function TaskTemplateDrawer({ open, category, currentOrgId, scopeOrgId, t
         <div className="flex items-center justify-between border-b border-slate-100 px-6 py-4">
           <div>
             <h3 className="text-lg font-semibold text-slate-900">{drawerTitle}</h3>
-            <p className="mt-1 text-xs text-slate-400">{category === "DAILY" ? "用于主播日常任务三步向导的表单草稿。" : "用于临时任务发放的表单草稿。"}</p>
+            <p className="mt-1 text-xs text-slate-400">
+              {category === "DAILY" ? "用于主播日常任务三步向导的表单草稿。"
+                : category === "HALL_DAILY" ? "用于厅管日常任务发放的表单草稿。"
+                : "用于临时任务发放的表单草稿。"}
+            </p>
           </div>
           <button type="button" onClick={onClose} className="rounded-2xl p-2 text-slate-400 transition hover:bg-slate-100">
             <X size={18} />
@@ -251,7 +284,9 @@ export function TaskTemplateDrawer({ open, category, currentOrgId, scopeOrgId, t
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-base font-semibold text-slate-900">表单题目</p>
-                <p className="text-xs text-slate-400">请尽量让主播在同一张任务表里完成完整的工作手册动作。</p>
+                <p className="text-xs text-slate-400">
+                  {category === "HALL_DAILY" ? "请尽量让厅管在同一张任务表里完成完整的工作手册动作。" : "请尽量让主播在同一张任务表里完成完整的工作手册动作。"}
+                </p>
               </div>
               <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs text-slate-500">{items.length} 项</span>
             </div>

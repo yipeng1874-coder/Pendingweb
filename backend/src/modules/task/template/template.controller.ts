@@ -52,7 +52,7 @@ export const TemplateController = {
   async create(req: any, res: any) {
     const { title, description, category, orgId, items } = req.body;
     if (!title || !category || !orgId) return fail(res, "TEMPLATE_REQUIRED_FIELDS", "请填写标题、分类和所属组织", 400);
-    if (!["DAILY", "TEMPORARY"].includes(category)) return fail(res, "INVALID_CATEGORY", "任务类型无效", 400);
+    if (!["DAILY", "HALL_DAILY", "TEMPORARY"].includes(category)) return fail(res, "INVALID_CATEGORY", "任务类型无效", 400);
 
     try {
       const template = await TemplateService.create({

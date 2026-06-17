@@ -114,7 +114,7 @@ export const TemplateService = {
       throw new Error("TEMPLATE_SCOPE_MISMATCH");
     }
 
-    if (category === "DAILY") {
+    if (category === "DAILY" || category === "HALL_DAILY") {
       ensureDailyTemplateRole(roleCode);
       ensureDailyTemplateScope(scopeOrgId);
     }
@@ -122,7 +122,7 @@ export const TemplateService = {
     const effectiveOrgId = scopeOrgId || orgId;
     if (effectiveOrgId) {
       const org = await resolveTemplateOrg(prisma, effectiveOrgId, scopePath, roleCode);
-      if (category === "DAILY") ensureDailyBaseOrg(org);
+      if (category === "DAILY" || category === "HALL_DAILY") ensureDailyBaseOrg(org);
       where.orgId = effectiveOrgId;
     } else if (scopePath && roleCode !== "DEV_ADMIN") {
       const orgs = await prisma.orgUnit.findMany({
@@ -154,7 +154,7 @@ export const TemplateService = {
   async create(data: {
     title: string;
     description?: string;
-    category: "DAILY" | "TEMPORARY";
+    category: "DAILY" | "HALL_DAILY" | "TEMPORARY";
     orgId: string;
     createdBy: string;
     scopePath?: string;
@@ -169,13 +169,13 @@ export const TemplateService = {
       options?: Array<{ sortOrder: number; label: string }>;
     }>;
   }) {
-    if (data.category === "DAILY") {
+    if (data.category === "DAILY" || data.category === "HALL_DAILY") {
       ensureDailyTemplateRole(data.roleCode);
       ensureDailyTemplateScope(data.scopeOrgId);
     }
     const org = await resolveTemplateOrg(prisma, data.orgId, data.scopePath, data.roleCode);
     ensureScopeOrgMatch(data.orgId, data.scopeOrgId);
-    if (data.category === "DAILY") ensureDailyBaseOrg(org);
+    if (data.category === "DAILY" || data.category === "HALL_DAILY") ensureDailyBaseOrg(org);
 
     const normalizedItems = normalizeTemplateItems(data.items);
 
@@ -315,7 +315,7 @@ export const TemplateService = {
     const source = await ensureTemplateAccessible(prisma, id, scopePath, roleCode, {
       items: { include: { options: true }, orderBy: { sortOrder: "asc" } },
     }, scopeOrgId);
-    if (source.category === "DAILY") {
+    if (source.category === "DAILY" || source.category === "HALL_DAILY") {
       ensureDailyTemplateRole(roleCode);
       ensureDailyTemplateScope(scopeOrgId);
       ensureScopeOrgMatch(source.orgId, scopeOrgId);

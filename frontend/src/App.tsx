@@ -21,6 +21,7 @@ const TemporaryTaskDashboardPage = lazy(() => import("./pages/tasks/dashboard/Te
 const ReminderPage = lazy(() => import("./pages/tasks/reminder/ReminderPage").then((m) => ({ default: m.ReminderPage })));
 const DailyIssuePage = lazy(() => import("./pages/tasks/manage/DailyIssuePage").then((m) => ({ default: m.DailyIssuePage })));
 const TemporaryIssuePage = lazy(() => import("./pages/tasks/manage/TemporaryIssuePage").then((m) => ({ default: m.TemporaryIssuePage })));
+const HallDailyIssuePage = lazy(() => import("./pages/tasks/manage/HallDailyIssuePage").then((m) => ({ default: m.HallDailyIssuePage })));
 const ProgressReportPage = lazy(() => import("./pages/tasks/manage/ProgressReportPage").then((m) => ({ default: m.ProgressReportPage })));
 const CockpitPage = lazy(() => import("./pages/tasks/cockpit/CockpitPage").then((m) => ({ default: m.CockpitPage })));
 const WorkflowTaskPage = lazy(() => import("./pages/tasks/collaboration/WorkflowTaskPage").then((m) => ({ default: m.WorkflowTaskPage })));
@@ -79,6 +80,7 @@ export default function App() {
           <Route path="/tasks/templates/daily-library" element={<RoleProtected roles={["DEV_ADMIN", "HQ_ADMIN", "BASE_ADMIN"]} permissions={["task:template:manage"]}><DailyIssuePage /></RoleProtected>} />
           <Route path="/tasks/issue/daily" element={<Navigate to="/tasks/templates/daily-library" replace />} />
           <Route path="/tasks/issue/temporary" element={<RoleProtected roles={["DEV_ADMIN", "HQ_ADMIN", "BASE_ADMIN", "TEAM_ADMIN"]}><TemporaryIssuePage /></RoleProtected>} />
+          <Route path="/tasks/issue/hall-daily" element={<RoleProtected roles={["DEV_ADMIN", "HQ_ADMIN", "BASE_ADMIN", "TEAM_ADMIN"]}><HallDailyIssuePage /></RoleProtected>} />
           <Route path="/tasks/collaboration/workflow" element={<RoleProtected roles={["DEV_ADMIN", "HQ_ADMIN", "BASE_ADMIN", "TEAM_ADMIN", "HALL_MANAGER"]}><WorkflowTaskPage /></RoleProtected>} />
           <Route path="/tasks/issue" element={<Navigate to="/tasks/issue/daily" replace />} />
           <Route path="/tasks/assignment-management" element={<Navigate to="/tasks/issue/temporary" replace />} />

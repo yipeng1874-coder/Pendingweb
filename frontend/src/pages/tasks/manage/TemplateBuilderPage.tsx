@@ -5,7 +5,7 @@ import {
 } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
 import type { Identity, OrgUnit, TaskAssignment, TaskCategory, TaskItem, TaskItemType, TaskTemplate } from "../../../types";
-import { assignmentApi, templateApi } from "../../../services/task";
+import { assignmentApi, hallDailyApi, templateApi, type HallTaskAssignment, type HallTaskTemplate } from "../../../services/task";
 import { fetchOrgTree } from "../../../services/organization";
 import { isLearningLinkValid, normalizeLearningLink } from "../../../shared/utils/learningLink";
 import { useIdentityStore } from "../../../stores/identityStore";
@@ -48,9 +48,25 @@ function findBaseByOrgId(orgs: OrgUnit[], orgId?: string) {
   return current;
 }
 
+function findTeamByOrgId(orgs: OrgUnit[], orgId?: string) {
+  if (!orgId) return null;
+  let current = orgs.find((org) => org.id === orgId) ?? null;
+  while (current && current.orgType !== "TEAM") {
+    const parentId = current.parentId;
+    current = parentId ? orgs.find((org) => org.id === parentId) ?? null : null;
+  }
+  return current;
+}
+
 function getAvailableBaseOrgs(orgs: OrgUnit[], identity?: Identity) {
   return orgs
     .filter((org) => org.status === "active" && org.orgType === "BASE" && isOrgWithinScope(org, identity?.scopePath))
+    .sort((left, right) => left.path.localeCompare(right.path));
+}
+
+function getAvailableTeamOrgs(orgs: OrgUnit[], identity?: Identity) {
+  return orgs
+    .filter((org) => org.status === "active" && org.orgType === "TEAM" && isOrgWithinScope(org, identity?.scopePath))
     .sort((left, right) => left.path.localeCompare(right.path));
 }
 
@@ -86,6 +102,17 @@ const templateCategoryMeta: Record<TaskCategory, {
     emptyText: "当前还没有临时任务模板，点击右上角新建即可开始维护。",
     fixedTypeLabel: "临时任务（个人鉴权）",
     fixedTypeDesc: "当前模板库只维护个人鉴权临时任务模板；模板内容始终按草稿维护，真正投放以任务发放为准。",
+  },
+  HALL_DAILY: {
+    route: "/tasks/templates/hall-daily",
+    pageTitle: "厅管日常任务库",
+    pageDesc: "统一管理厅管日常任务模板草稿、待生效任务、生效中任务与历史结束任务。",
+    switchTitle: "厅管日常任务",
+    switchDesc: "面向厅管理员的日常任务，适合厅级别长期复用的标准化任务。",
+    createLabel: "新建厅管日常模板",
+    emptyText: "当前还没有厅管日常任务模板，点击右上角新建即可开始维护。",
+    fixedTypeLabel: "厅管日常任务",
+    fixedTypeDesc: "当前模板库只维护厅管日常任务模板；模板内容始终按草稿维护，真正投放以任务发放为准。",
   },
 };
 
@@ -166,22 +193,35 @@ function ItemEditor({ item, onChange, onDelete }: { item: DraftItem; onChange: (
 export function TemplateBuilderPage({ category }: { category: TaskCategory }) {
   const [searchParams] = useSearchParams();
   const currentIdentity = useIdentityStore((s) => s.currentIdentity);
-  const [templates, setTemplates] = useState<TaskTemplate[]>([]);
   const [orgs, setOrgs] = useState<OrgUnit[]>([]);
   const [loading, setLoading] = useState(true);
-  const [dailyAssignments, setDailyAssignments] = useState<TaskAssignment[]>([]);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [showNew, setShowNew] = useState(false);
-  const [viewingTemplate, setViewingTemplate] = useState<TaskTemplate | null>(null);
   const [form, setForm] = useState({ title: "", description: "", category });
   const [draftItems, setDraftItems] = useState<DraftItem[]>([]);
   const [saving, setSaving] = useState(false);
   const [selectedScopeOrgId, setSelectedScopeOrgId] = useState(searchParams.get("scopeOrgId") ?? "");
 
+  // ── 主播日常 / 临时 任务状态（旧体系）──
+  const [templates, setTemplates] = useState<TaskTemplate[]>([]);
+  const [viewingTemplate, setViewingTemplate] = useState<TaskTemplate | null>(null);
+  const [dailyAssignments, setDailyAssignments] = useState<TaskAssignment[]>([]);
+
+  // ── 厅管日常任务状态（独立体系）──
+  const [hallTemplates, setHallTemplates] = useState<HallTaskTemplate[]>([]);
+  const [hallAssignments, setHallAssignments] = useState<HallTaskAssignment[]>([]);
+  const [viewingHallTemplate, setViewingHallTemplate] = useState<HallTaskTemplate | null>(null);
+
   const categoryMeta = templateCategoryMeta[category];
   const availableBaseOrgs = useMemo(() => getAvailableBaseOrgs(orgs, currentIdentity), [orgs, currentIdentity]);
+  const availableTeamOrgs = useMemo(() => getAvailableTeamOrgs(orgs, currentIdentity), [orgs, currentIdentity]);
   const selectedScopeOrg = useMemo(() => orgs.find((org) => org.id === selectedScopeOrgId) ?? null, [orgs, selectedScopeOrgId]);
+
+  // DAILY 只需 BASE 选择，HALL_DAILY 只需 TEAM 选择
   const requiresBaseSelection = category === "DAILY";
+  const requiresTeamSelection = category === "HALL_DAILY";
+
+  // 旧体系模板分组（DAILY / TEMPORARY）
   const categoryTemplates = useMemo(
     () => templates.filter((template) => template.category === category),
     [category, templates],
@@ -195,36 +235,71 @@ export function TemplateBuilderPage({ category }: { category: TaskCategory }) {
     [categoryTemplates],
   );
   const scheduledAssignments = useMemo(
-    () => dailyAssignments.filter((assignment) => assignment.status === "scheduled"),
+    () => dailyAssignments.filter((a) => a.status === "scheduled"),
     [dailyAssignments],
   );
   const activeAssignments = useMemo(
-    () => dailyAssignments.filter((assignment) => assignment.status === "active"),
+    () => dailyAssignments.filter((a) => a.status === "active"),
     [dailyAssignments],
   );
   const endedAssignments = useMemo(
-    () => dailyAssignments.filter((assignment) => assignment.status === "ended" || assignment.status === "deleted"),
+    () => dailyAssignments.filter((a) => a.status === "ended" || a.status === "deleted"),
     [dailyAssignments],
+  );
+
+  // 厅管模板分组
+  const hallDraftTemplates = useMemo(
+    () => hallTemplates.filter((t) => t.status === "draft"),
+    [hallTemplates],
+  );
+  const hallScheduledAssignments = useMemo(
+    () => hallAssignments.filter((a) => a.status === "scheduled"),
+    [hallAssignments],
+  );
+  const hallActiveAssignments = useMemo(
+    () => hallAssignments.filter((a) => a.status === "active"),
+    [hallAssignments],
+  );
+  const hallEndedAssignments = useMemo(
+    () => hallAssignments.filter((a) => a.status === "ended" || a.status === "deleted"),
+    [hallAssignments],
   );
 
   const load = async () => {
     setLoading(true);
-    const [orgTree, data, assignmentRows] = await Promise.all([
-      fetchOrgTree().catch(() => [] as OrgUnit[]),
-      category === "DAILY"
-        ? selectedScopeOrgId
-          ? templateApi.list({ category: "DAILY", orgId: selectedScopeOrgId, scopeOrgId: selectedScopeOrgId }).catch(() => [] as TaskTemplate[])
-          : Promise.resolve([] as TaskTemplate[])
-        : templateApi.list({ category: "TEMPORARY" }).catch(() => [] as TaskTemplate[]),
-      category === "DAILY"
-        ? selectedScopeOrgId
-          ? assignmentApi.list({ scopeOrgId: selectedScopeOrgId, status: "scheduled,active,ended,deleted" }).catch(() => [] as TaskAssignment[])
-          : Promise.resolve([] as TaskAssignment[])
-        : Promise.resolve([] as TaskAssignment[]),
-    ]);
-    setOrgs(orgTree);
-    setTemplates(data);
-    setDailyAssignments(assignmentRows.filter((assignment) => assignment.category === "DAILY"));
+    if (category === "HALL_DAILY") {
+      // 厅管独立分支
+      const [orgTree, tmplRows, assignRows] = await Promise.all([
+        fetchOrgTree().catch(() => [] as OrgUnit[]),
+        selectedScopeOrgId
+          ? hallDailyApi.listTemplates({ teamOrgId: selectedScopeOrgId }).catch(() => [] as HallTaskTemplate[])
+          : Promise.resolve([] as HallTaskTemplate[]),
+        selectedScopeOrgId
+          ? hallDailyApi.listAssignments({ teamOrgId: selectedScopeOrgId, status: "scheduled,active,ended,deleted" }).catch(() => [] as HallTaskAssignment[])
+          : Promise.resolve([] as HallTaskAssignment[]),
+      ]);
+      setOrgs(orgTree);
+      setHallTemplates(tmplRows);
+      setHallAssignments(assignRows);
+    } else {
+      // 主播日常 / 临时 旧分支
+      const [orgTree, data, assignmentRows] = await Promise.all([
+        fetchOrgTree().catch(() => [] as OrgUnit[]),
+        category === "DAILY"
+          ? selectedScopeOrgId
+            ? templateApi.list({ category, orgId: selectedScopeOrgId, scopeOrgId: selectedScopeOrgId }).catch(() => [] as TaskTemplate[])
+            : Promise.resolve([] as TaskTemplate[])
+          : templateApi.list({ category: "TEMPORARY" }).catch(() => [] as TaskTemplate[]),
+        category === "DAILY"
+          ? selectedScopeOrgId
+            ? assignmentApi.list({ scopeOrgId: selectedScopeOrgId, status: "scheduled,active,ended,deleted" }).catch(() => [] as TaskAssignment[])
+            : Promise.resolve([] as TaskAssignment[])
+          : Promise.resolve([] as TaskAssignment[]),
+      ]);
+      setOrgs(orgTree);
+      setTemplates(data);
+      setDailyAssignments(assignmentRows.filter((a) => a.category === category));
+    }
     setLoading(false);
   };
 
@@ -236,21 +311,36 @@ export function TemplateBuilderPage({ category }: { category: TaskCategory }) {
     }
   }, [category, editingId]);
 
+  // 自动选择 BASE（主播日常）
   useEffect(() => {
-    const validIds = new Set(availableBaseOrgs.map((org) => org.id));
     if (category !== "DAILY") {
-      if (selectedScopeOrgId) setSelectedScopeOrgId("");
+      if (!requiresBaseSelection && selectedScopeOrgId && category !== "HALL_DAILY") setSelectedScopeOrgId("");
       return;
     }
+    const validIds = new Set(availableBaseOrgs.map((org) => org.id));
     if (selectedScopeOrgId && validIds.has(selectedScopeOrgId)) return;
     const fallbackCandidates = [
       searchParams.get("scopeOrgId") ?? "",
       findBaseByOrgId(orgs, currentIdentity?.orgId)?.id ?? "",
       availableBaseOrgs.length === 1 ? availableBaseOrgs[0].id : "",
-    ].filter((value): value is string => Boolean(value));
-    const nextScopeOrgId = fallbackCandidates.find((value) => validIds.has(value)) ?? "";
-    if (nextScopeOrgId !== selectedScopeOrgId) setSelectedScopeOrgId(nextScopeOrgId);
-  }, [availableBaseOrgs, category, currentIdentity?.orgId, orgs, searchParams, selectedScopeOrgId]);
+    ].filter((v): v is string => Boolean(v));
+    const next = fallbackCandidates.find((v) => validIds.has(v)) ?? "";
+    if (next !== selectedScopeOrgId) setSelectedScopeOrgId(next);
+  }, [availableBaseOrgs, category, currentIdentity?.orgId, orgs, searchParams, selectedScopeOrgId, requiresBaseSelection]);
+
+  // 自动选择 TEAM（厅管日常）
+  useEffect(() => {
+    if (category !== "HALL_DAILY") return;
+    const validIds = new Set(availableTeamOrgs.map((org) => org.id));
+    if (selectedScopeOrgId && validIds.has(selectedScopeOrgId)) return;
+    const fallbackCandidates = [
+      searchParams.get("scopeOrgId") ?? "",
+      findTeamByOrgId(orgs, currentIdentity?.orgId)?.id ?? "",
+      availableTeamOrgs.length === 1 ? availableTeamOrgs[0].id : "",
+    ].filter((v): v is string => Boolean(v));
+    const next = fallbackCandidates.find((v) => validIds.has(v)) ?? "";
+    if (next !== selectedScopeOrgId) setSelectedScopeOrgId(next);
+  }, [availableTeamOrgs, category, currentIdentity?.orgId, orgs, searchParams, selectedScopeOrgId]);
 
   function addItem(type: TaskItemType) {
     setDraftItems((prev) => [...prev, {
@@ -300,15 +390,15 @@ export function TemplateBuilderPage({ category }: { category: TaskCategory }) {
 
     try {
       if (editingId) {
-        await templateApi.update(editingId, { title: form.title, description: form.description, items }, category === "DAILY" ? { scopeOrgId: selectedScopeOrgId } : undefined);
+        await templateApi.update(editingId, { title: form.title, description: form.description, items }, requiresBaseSelection ? { scopeOrgId: selectedScopeOrgId } : undefined);
       } else {
-        const targetOrgId = category === "DAILY" ? selectedScopeOrgId : currentIdentity.orgId;
+        const targetOrgId = requiresBaseSelection ? selectedScopeOrgId : currentIdentity.orgId;
         if (!targetOrgId) {
           window.alert("请先选择基地后再维护日常模板");
           setSaving(false);
           return;
         }
-        await templateApi.create({ ...form, category, orgId: targetOrgId, scopeOrgId: category === "DAILY" ? selectedScopeOrgId : undefined, items });
+        await templateApi.create({ ...form, category, orgId: targetOrgId, scopeOrgId: requiresBaseSelection ? selectedScopeOrgId : undefined, items });
       }
     } catch (error) {
       window.alert(error instanceof Error ? error.message : "保存失败");
@@ -324,7 +414,7 @@ export function TemplateBuilderPage({ category }: { category: TaskCategory }) {
   }
 
   function openCreatePanel() {
-    if (category === "DAILY" && !selectedScopeOrgId) {
+    if (requiresBaseSelection && !selectedScopeOrgId) {
       window.alert("请先选择基地后再新建日常模板");
       return;
     }
@@ -348,7 +438,7 @@ export function TemplateBuilderPage({ category }: { category: TaskCategory }) {
   async function handleDeleteTemplate(template: TaskTemplate) {
     const confirmed = window.confirm("确认删除这份草稿模板？未正式发放的关联草稿也会一并清理。");
     if (!confirmed) return;
-    const result = await templateApi.delete(template.id, category === "DAILY" ? { scopeOrgId: selectedScopeOrgId } : undefined).catch((error) => {
+    const result = await templateApi.delete(template.id, requiresBaseSelection ? { scopeOrgId: selectedScopeOrgId } : undefined).catch((error) => {
       window.alert(error instanceof Error ? error.message : "删除模板失败");
       return null;
     });
@@ -357,7 +447,7 @@ export function TemplateBuilderPage({ category }: { category: TaskCategory }) {
   }
 
   async function handleCopyTemplate(template: TaskTemplate) {
-    const result = await templateApi.copy(template.id, category === "DAILY" ? { scopeOrgId: selectedScopeOrgId } : undefined).catch((error) => {
+    const result = await templateApi.copy(template.id, requiresBaseSelection ? { scopeOrgId: selectedScopeOrgId } : undefined).catch((error) => {
       window.alert(error instanceof Error ? error.message : "复制模板失败");
       return null;
     });
@@ -367,7 +457,7 @@ export function TemplateBuilderPage({ category }: { category: TaskCategory }) {
   }
 
   async function handleViewTemplate(templateId: string) {
-    const result = await templateApi.getById(templateId, category === "DAILY" ? { scopeOrgId: selectedScopeOrgId } : undefined).catch((error) => {
+    const result = await templateApi.getById(templateId, requiresBaseSelection ? { scopeOrgId: selectedScopeOrgId } : undefined).catch((error) => {
       window.alert(error instanceof Error ? error.message : "加载表单详情失败");
       return null;
     });
@@ -377,7 +467,7 @@ export function TemplateBuilderPage({ category }: { category: TaskCategory }) {
 
   async function handleEndAssignment(assignment: TaskAssignment) {
     if (assignment.status !== "active" && assignment.status !== "scheduled") return;
-    const confirmed = window.confirm(`确认结束任务「${assignment.template?.title ?? "未命名主播日常任务"}」吗？结束后将不再作为当前主播日常任务生效。`);
+    const confirmed = window.confirm(`确认结束任务「${assignment.template?.title ?? `未命名${categoryMeta.switchTitle}`}」吗？结束后将不再作为当前${categoryMeta.switchTitle}生效。`);
     if (!confirmed) return;
     const result = await assignmentApi.close(assignment.id, selectedScopeOrgId || undefined).catch((error) => {
       window.alert(error instanceof Error ? error.message : "结束任务失败");
@@ -401,7 +491,7 @@ export function TemplateBuilderPage({ category }: { category: TaskCategory }) {
 
   return (
     <div className="space-y-6">
-      {category === "DAILY" && (
+      {(category === "DAILY" || category === "HALL_DAILY") && (
         <section className="rounded-3xl bg-white p-6 shadow-[0_10px_30px_rgba(15,23,42,0.05)]">
           <div className="flex flex-wrap items-start justify-between gap-4">
             <div>
@@ -448,8 +538,8 @@ export function TemplateBuilderPage({ category }: { category: TaskCategory }) {
       </div>
 
       <div className="rounded-2xl border border-blue-100 bg-blue-50 px-4 py-3 text-sm text-blue-700">
-        {category === "DAILY"
-          ? <>当前页面已升级为独立的 <span className="font-medium">主播日常任务库</span>；同一页面内统一查看 <span className="font-medium">草稿</span>、<span className="font-medium">待生效</span>、<span className="font-medium">生效中</span>、<span className="font-medium">已结束</span> 四类主播日常任务资产，其中草稿仅展示从未发布过的任务。</>
+        {(category === "DAILY" || category === "HALL_DAILY")
+          ? <>当前页面已升级为独立的 <span className="font-medium">{categoryMeta.pageTitle}</span>；同一页面内统一查看 <span className="font-medium">草稿</span>、<span className="font-medium">待生效</span>、<span className="font-medium">生效中</span>、<span className="font-medium">已结束</span> 四类日常任务资产，其中草稿仅展示从未发布过的任务。</>
           : <>当前页面已是独立的 <span className="font-medium">{categoryMeta.fixedTypeLabel}</span> 模板库；左侧菜单负责切换"主播日常任务"和"临时任务"。模板会按使用情况分成两类：<span className="font-medium">草稿</span> 表示从未被发放使用，<span className="font-medium">已发布</span> 表示至少被正式发放过一次。</>}
       </div>
 
@@ -459,7 +549,7 @@ export function TemplateBuilderPage({ category }: { category: TaskCategory }) {
         <div className="flex flex-col items-center justify-center rounded-2xl border border-dashed border-amber-200 bg-amber-50 py-16 text-amber-700">
           <p className="text-sm">请先选择基地，再查看该基地的日常模板库。</p>
         </div>
-      ) : category === "DAILY" ? (
+      ) : (category === "DAILY" || category === "HALL_DAILY") ? (
         <div className="space-y-6">
           <section className="space-y-3">
             <div className="flex flex-wrap items-center gap-3">
@@ -481,7 +571,7 @@ export function TemplateBuilderPage({ category }: { category: TaskCategory }) {
                             <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${sm.cls}`}>{sm.text}</span>
                             <span className="rounded-full bg-yellow-100 px-2 py-0.5 text-xs font-medium text-yellow-700">草稿</span>
                             <span className="text-xs text-slate-400">v{t.version}</span>
-                            <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-500">主播日常任务</span>
+                            <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-500">{categoryMeta.fixedTypeLabel}</span>
                           </div>
                           <p className="font-semibold text-slate-900">{t.title}</p>
                           {t.description && <p className="mt-1 truncate text-sm text-slate-500">{t.description}</p>}
@@ -502,8 +592,8 @@ export function TemplateBuilderPage({ category }: { category: TaskCategory }) {
 
           {[
             { key: "scheduled", title: "待生效", desc: "已确认发放，等待次日 00:00 自动接管。", rows: scheduledAssignments },
-            { key: "active", title: "生效中", desc: "当前正在执行的主播日常任务。", rows: activeAssignments },
-            { key: "ended", title: "已结束", desc: "已结束或已删除的历史主播日常任务。", rows: endedAssignments },
+            { key: "active", title: "生效中", desc: `当前正在执行的${categoryMeta.switchTitle}。`, rows: activeAssignments },
+            { key: "ended", title: "已结束", desc: `已结束或已删除的历史${categoryMeta.switchTitle}。`, rows: endedAssignments },
           ].map((group) => (
             <section key={group.key} className="space-y-3">
               <div className="flex flex-wrap items-center gap-3">
@@ -526,7 +616,7 @@ export function TemplateBuilderPage({ category }: { category: TaskCategory }) {
                               <span className="rounded-full bg-blue-50 px-2 py-0.5 text-xs font-medium text-blue-600">{assignment.effectMode === "immediate" ? "立即生效" : "次日凌晨生效"}</span>
                               <span className="text-xs text-slate-400">v{assignment.templateVersion ?? assignment.template?.version ?? 1}</span>
                             </div>
-                            <p className="font-semibold text-slate-900">{assignment.template?.title ?? "未命名主播日常任务"}</p>
+                            <p className="font-semibold text-slate-900">{assignment.template?.title ?? `未命名${categoryMeta.switchTitle}`}</p>
                             <div className="mt-2 flex flex-wrap items-center gap-3 text-xs text-slate-500">
                               <span>正式发放：{assignment.publishedAt ? new Date(assignment.publishedAt).toLocaleString("zh-CN") : "未记录"}</span>
                               <span>生效时间：{assignment.effectiveAt ? new Date(assignment.effectiveAt).toLocaleString("zh-CN") : "未记录"}</span>
