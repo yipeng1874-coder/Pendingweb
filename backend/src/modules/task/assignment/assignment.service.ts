@@ -471,7 +471,9 @@ async function toggleAssignmentActive(id: string, isActive: boolean, _scopePath?
         data: { status: "ended", endedAt: new Date(), isActive: false },
       });
     }
-    await endOtherActiveDailyAssignments(tx, assignment.ownerScopePath ?? undefined, assignment.id, new Date());
+    const targets = await tx.taskAssignmentTarget.findMany({ where: { assignmentId: id }, select: { orgId: true } });
+    const targetOrgIds = targets.map((t: { orgId: string }) => t.orgId);
+    await endOtherActiveDailyAssignments(tx, targetOrgIds, assignment.id, new Date());
     return tx.taskAssignment.update({
       where: { id },
       data: { status: "active", deletedAt: null, endedAt: null, isActive: true },
@@ -587,20 +589,21 @@ async function publishDailyDraft(id: string, effectMode: "immediate" | "next_mid
     const now = new Date();
     const effectiveAt = effectMode === "next_midnight" ? nextMidnight(now) : now;
     const nextStatus = effectMode === "next_midnight" ? "scheduled" : "active";
+    const targetOrgIds = assignment.targets.map((t: { orgId: string }) => t.orgId);
     if (nextStatus === "scheduled") {
       const scheduledExists = await tx.taskAssignment.findFirst({
         where: {
           category: "DAILY",
-          ownerScopePath: assignment.ownerScopePath ?? null,
           status: "scheduled",
           id: { not: assignment.id },
+          targets: { some: { orgId: { in: targetOrgIds } } },
         },
         select: { id: true },
       });
       if (scheduledExists) throw new Error("DAILY_SCHEDULED_EXISTS");
     }
     if (nextStatus === "active") {
-      await endOtherActiveDailyAssignments(tx, assignment.ownerScopePath ?? undefined, assignment.id, now);
+      await endOtherActiveDailyAssignments(tx, targetOrgIds, assignment.id, now);
     }
     await tx.taskAssignment.update({
       where: { id },
@@ -624,7 +627,8 @@ async function createAssignment(data: any) {
   return prisma.$transaction(async (tx) => {
     const template = await ensureTemplatePublished(tx, data.templateId);
     const now = new Date();
-    await endOtherActiveDailyAssignments(tx, data.ownerScopePath, "", now);
+    const orgIds: string[] = dedupe(data.orgIds ?? []);
+    await endOtherActiveDailyAssignments(tx, orgIds, "", now);
     const assignment = await tx.taskAssignment.create({
       data: {
         templateId: data.templateId,

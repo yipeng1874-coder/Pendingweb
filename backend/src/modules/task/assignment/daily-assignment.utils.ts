@@ -244,15 +244,15 @@ export async function replaceAssignmentExclusions(
   }
 }
 
-export async function endOtherActiveDailyAssignments(tx: any, ownerScopePath: string | undefined, keepId: string, endedAt: Date) {
-  const scopeFilter = ownerScopePath ? { ownerScopePath } : { ownerScopePath: null };
+export async function endOtherActiveDailyAssignments(tx: any, targetOrgIds: string[], keepId: string, endedAt: Date) {
+  if (!targetOrgIds.length) return [];
   const rows = await tx.taskAssignment.findMany({
     where: {
       category: "DAILY",
-      ...scopeFilter,
       status: "active",
       deletedAt: null,
-      id: { not: keepId },
+      id: keepId ? { not: keepId } : undefined,
+      targets: { some: { orgId: { in: targetOrgIds } } },
     },
     select: { id: true },
   });
@@ -274,14 +274,15 @@ export async function reconcileDailyAssignments(scopePath?: string) {
         status: "scheduled",
         deletedAt: null,
         effectiveAt: { lte: now },
-        ...(scopePath ? { ownerScopePath: { startsWith: scopePath } } : {}),
+        ...(scopePath ? { targets: { some: { orgPathSnapshot: { startsWith: scopePath } } } } : {}),
       },
-      select: { id: true, ownerScopePath: true },
+      select: { id: true, targets: { select: { orgId: true } } },
       orderBy: [{ effectiveAt: "asc" }, { createdAt: "asc" }],
     });
 
     for (const assignment of dueAssignments) {
-      await endOtherActiveDailyAssignments(tx, assignment.ownerScopePath ?? undefined, assignment.id, now);
+      const targetOrgIds = assignment.targets.map((t: { orgId: string }) => t.orgId);
+      await endOtherActiveDailyAssignments(tx, targetOrgIds, assignment.id, now);
       await tx.taskAssignment.update({
         where: { id: assignment.id },
         data: { status: "active", isActive: true, endedAt: null },
