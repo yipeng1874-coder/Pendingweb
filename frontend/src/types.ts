@@ -438,6 +438,32 @@ export interface DailyDashboardHallDetailsResponse {
   details: DailyDashboardHallDetailItem[];
 }
 
+// ── 基地看板：历史待办完成率 ─────────────────────────────
+export interface DailyRangeStatsTeam {
+  orgId: string;
+  orgName: string;
+  total: number;
+  completed: number;
+  exemptions: number;
+  completionRate: number;
+  exemptionRate: number;
+}
+
+export interface DailyRangeStatsResponse {
+  startDate: string;
+  endDate: string;
+  effectiveDays: number;
+  baseOrg: { id: string; name: string };
+  summary: {
+    total: number;
+    completed: number;
+    exemptions: number;
+    completionRate: number;
+    exemptionRate: number;
+  };
+  teams: DailyRangeStatsTeam[];
+}
+
 export interface DailyDashboardAnchorItemDetailResponse {
   taskDate: string;
   baseOrg: { id: string; name: string; orgType: string };

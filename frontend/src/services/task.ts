@@ -468,4 +468,57 @@ export const reportApi = {
     const q = params.toString();
     return api.get<import("../types").DailyDashboardAnchorItemDetailResponse>(`/tasks/report/daily-dashboard/halls/${hallOrgId}/anchors/${userId}/items${q ? `?${q}` : ""}`);
   },
+  getDailyRangeStats: (startDate: string, endDate: string, scopeOrgId?: string) => {
+    const params = new URLSearchParams();
+    params.set("startDate", startDate);
+    params.set("endDate", endDate);
+    if (scopeOrgId) params.set("scopeOrgId", scopeOrgId);
+    return api.get<import("../types").DailyRangeStatsResponse>(`/tasks/report/daily-range-stats?${params.toString()}`);
+  },
+};
+
+// ---------- 主播汇总 ----------
+
+export type OperatorStat = {
+  name: string;
+  totalCount: number;
+  onlineCount: number;
+  offlineCount: number;
+  within7Days: number;
+  within30Days: number;
+};
+
+export type AnchorDailySummary = {
+  id: string;
+  baseOrgId: string;
+  baseOrgName: string;
+  uploadDate: string;
+  uploadedBy: string;
+  uploaderName: string;
+  totalCount: number;
+  onlineCount: number;
+  offlineCount: number;
+  within7Days: number;
+  within30Days: number;
+  operatorStats: OperatorStat[];
+  rawRowCount: number;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export const anchorSummaryApi = {
+  getLatest: (scopeOrgId?: string) => {
+    const params = new URLSearchParams();
+    if (scopeOrgId) params.set("scopeOrgId", scopeOrgId);
+    const q = params.toString();
+    return api.get<AnchorDailySummary | null>(`/anchor-summary/latest${q ? `?${q}` : ""}`);
+  },
+  upload: (file: File, scopeOrgId?: string) => {
+    const formData = new FormData();
+    formData.append("file", file);
+    const params = new URLSearchParams();
+    if (scopeOrgId) params.set("scopeOrgId", scopeOrgId);
+    const q = params.toString();
+    return api.postForm<AnchorDailySummary>(`/anchor-summary/upload${q ? `?${q}` : ""}`, formData);
+  },
 };

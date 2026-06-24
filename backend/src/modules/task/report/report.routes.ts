@@ -891,6 +891,281 @@ reportRoutes.get("/tasks/report/daily-dashboard/teams/:teamOrgId/children", perm
   });
 });
 
+// ── 新增：基地看板 — 历史待办完成率（范围统计） ─────────────────────────────
+reportRoutes.get("/tasks/report/daily-range-stats", permissionRequired("task:report:view"), async (req: any, res: any) => {
+  if (!canViewDailyDashboard(req.identity?.roleCode)) {
+    return fail(res, "DAILY_DASHBOARD_FORBIDDEN", "当前身份无权查看日常任务看板", 403);
+  }
+
+  const startDate = t(req.query.startDate);
+  const endDate = t(req.query.endDate);
+  const scopeOrgId = t(req.query.scopeOrgId) || undefined;
+
+  if (!startDate || !endDate) {
+    return fail(res, "MISSING_DATE_RANGE", "startDate 和 endDate 为必填项", 400);
+  }
+  if (startDate > endDate) {
+    return fail(res, "INVALID_DATE_RANGE", "startDate 不能晚于 endDate", 400);
+  }
+
+  // 枚举日期范围内所有日期（最多31天）
+  function enumerateDates(start: string, end: string): string[] {
+    const result: string[] = [];
+    const cur = new Date(`${start}T00:00:00Z`);
+    const endD = new Date(`${end}T00:00:00Z`);
+    let guard = 0;
+    while (cur <= endD && guard < 32) {
+      result.push(cur.toISOString().slice(0, 10));
+      cur.setUTCDate(cur.getUTCDate() + 1);
+      guard++;
+    }
+    return result;
+  }
+
+  const dates = enumerateDates(startDate, endDate);
+  if (dates.length === 0) {
+    return fail(res, "INVALID_DATE_RANGE", "日期范围无效", 400);
+  }
+
+  const baseOrg = await resolveBaseScopeOrg(scopeOrgId, req.identity).catch((error: Error) => error);
+  if (baseOrg instanceof Error) {
+    if (baseOrg.message === "BASE_SCOPE_REQUIRED") return fail(res, "BASE_SCOPE_REQUIRED", "请先切换并选择基地后查看", 400);
+    if (baseOrg.message === "SCOPE_ORG_NOT_FOUND") return fail(res, "SCOPE_ORG_NOT_FOUND", "当前基地不存在或已停用", 404);
+    if (baseOrg.message === "SCOPE_ORG_FORBIDDEN") return fail(res, "SCOPE_ORG_FORBIDDEN", "当前身份无权查看该基地", 403);
+    return fail(res, "DAILY_RANGE_STATS_SCOPE_FAILED", "基地解析失败", 500);
+  }
+
+  const viewerScopePath = req.identity?.scopePath ?? baseOrg.path;
+
+  // 1. 取当前有效的 DAILY assignments（只读，不调用 reconcile）
+  const assignments = await prisma.taskAssignment.findMany({
+    where: {
+      category: "DAILY",
+      targets: { some: { orgId: baseOrg.id } },
+      status: { in: ["scheduled", "active", "ended"] },
+      deletedAt: null,
+    },
+    include: {
+      targets: true,
+      exclusions: true,
+      template: {
+        select: {
+          id: true,
+          items: { select: { id: true, isRequired: true }, orderBy: { sortOrder: "asc" } },
+        },
+      },
+    },
+  });
+
+  if (assignments.length === 0) {
+    return ok(res, {
+      startDate,
+      endDate,
+      effectiveDays: dates.length,
+      baseOrg: { id: baseOrg.id, name: baseOrg.name },
+      summary: { total: 0, completed: 0, exemptions: 0, completionRate: 0, exemptionRate: 0 },
+      teams: [],
+    });
+  }
+
+  // 2. 取一次 audience（今日配置作分母，只读）
+  type AudienceMember = {
+    subjectKey: string;
+    userId: string;
+    teamOrgId?: string | null;
+    teamOrgName?: string | null;
+    hallOrgId?: string | null;
+    hallOrgName?: string | null;
+    hallOrgPath?: string | null;
+  };
+  const audienceMembers: AudienceMember[] = [];
+  const assignmentIds = new Set<string>();
+  const resolvedSubjectKeys = new Set<string>();
+
+  for (const assignment of assignments) {
+    const audience = await listAssignmentAudienceMembers(prisma, assignment as any);
+    for (const member of audience) {
+      if (!member.hallOrgId || !member.hallOrgName || !member.hallOrgPath) continue;
+      if (!(member.hallOrgPath === viewerScopePath || member.hallOrgPath.startsWith(`${viewerScopePath}/`) || viewerScopePath.startsWith(`${member.hallOrgPath}/`))) continue;
+      if (resolvedSubjectKeys.has(member.subjectKey)) continue;
+      resolvedSubjectKeys.add(member.subjectKey);
+      assignmentIds.add(assignment.id);
+      audienceMembers.push({
+        subjectKey: member.subjectKey,
+        userId: member.userId,
+        teamOrgId: member.teamOrgId,
+        teamOrgName: member.teamOrgName,
+        hallOrgId: member.hallOrgId,
+        hallOrgName: member.hallOrgName,
+        hallOrgPath: member.hallOrgPath,
+      });
+    }
+  }
+
+  const audienceSize = audienceMembers.length;
+  if (audienceSize === 0) {
+    return ok(res, {
+      startDate,
+      endDate,
+      effectiveDays: dates.length,
+      baseOrg: { id: baseOrg.id, name: baseOrg.name },
+      summary: { total: 0, completed: 0, exemptions: 0, completionRate: 0, exemptionRate: 0 },
+      teams: [],
+    });
+  }
+
+  // subjectKey -> teamOrgId / teamOrgName 映射
+  const subjectTeamMap = new Map<string, { teamOrgId: string | null; teamOrgName: string | null }>();
+  for (const m of audienceMembers) {
+    subjectTeamMap.set(m.subjectKey, { teamOrgId: m.teamOrgId ?? null, teamOrgName: m.teamOrgName ?? null });
+  }
+
+  // 3. 一次性查所有历史 records
+  // 修复：不按 assignmentId 过滤，改为按 subjectKey + recordDate 查询，
+  // 避免 assignment 重新发布/版本更新后历史 record 因 assignmentId 变化而查不到。
+  // 同时查出 assignmentId，用于去重时优先保留当前有效 assignment 的 record，
+  // 防止旧 assignment 的历史完成 record 污染统计结果。
+  const allRecordsRaw = await prisma.taskRecord.findMany({
+    where: {
+      subjectKey: { in: Array.from(resolvedSubjectKeys) },
+      recordDate: { in: dates },
+      assignment: { category: "DAILY", deletedAt: null },
+    },
+    select: {
+      assignmentId: true,
+      subjectKey: true,
+      recordDate: true,
+      submittedAt: true,
+      itemRecords: {
+        select: {
+          status: true,
+          taskItem: { select: { id: true, isRequired: true } },
+        },
+      },
+      exemption: { select: { status: true } },
+    },
+  });
+
+  // 4. 按 subjectKey + recordDate 去重：同一人同一天最多算一次。
+  // 优先保留当前有效 assignmentIds 中的 record，其次保留最新提交的（有 exemption 优先）。
+  type RawRecord = (typeof allRecordsRaw)[number];
+  const recordDedupeMap = new Map<string, RawRecord>();
+  for (const record of allRecordsRaw) {
+    const key = `${record.subjectKey}:${record.recordDate}`;
+    const existing = recordDedupeMap.get(key);
+    if (!existing) {
+      recordDedupeMap.set(key, record);
+      continue;
+    }
+    // 优先级：当前有效 assignment > 其他；有豁免 > 没豁免；有提交时间 > 没提交时间
+    const curIsValid = assignmentIds.has(record.assignmentId);
+    const existIsValid = assignmentIds.has(existing.assignmentId);
+    if (curIsValid && !existIsValid) {
+      recordDedupeMap.set(key, record);
+    } else if (curIsValid === existIsValid) {
+      // 同优先级：有豁免优先，其次按提交时间降序
+      const curHasExemption = !!record.exemption;
+      const existHasExemption = !!existing.exemption;
+      if (curHasExemption && !existHasExemption) {
+        recordDedupeMap.set(key, record);
+      } else if (!curHasExemption && !existHasExemption) {
+        if ((record.submittedAt ?? 0) > (existing.submittedAt ?? 0)) {
+          recordDedupeMap.set(key, record);
+        }
+      }
+    }
+  }
+  const records = Array.from(recordDedupeMap.values());
+
+  // teamOrgId -> { completed, exemptions }
+  // 统计：
+  //   completed = 当天所有必填 item 都是 done 的 record 数（豁免的不算完成）
+  //   exemptions = exemption.status === "approved" 的 record 数
+  //   total = audienceSize * dates.length
+
+  type TeamStat = { teamOrgId: string; teamOrgName: string; completed: number; exemptions: number };
+  const teamStatMap = new Map<string, TeamStat>();
+  let totalCompleted = 0;
+  let totalExemptions = 0;
+
+  for (const record of records) {
+    const teamInfo = subjectTeamMap.get(record.subjectKey);
+    if (!teamInfo) continue; // 不在当前 audience 范围内，跳过
+
+    const teamOrgId = teamInfo.teamOrgId ?? baseOrg.id;
+    const teamOrgName = teamInfo.teamOrgName ?? baseOrg.name;
+
+    if (!teamStatMap.has(teamOrgId)) {
+      teamStatMap.set(teamOrgId, { teamOrgId, teamOrgName, completed: 0, exemptions: 0 });
+    }
+    const stat = teamStatMap.get(teamOrgId)!;
+
+    const isExempted = record.exemption?.status === "approved";
+
+    // 判断是否完成：所有必填 item 均已 done，且不是豁免记录
+    if (!isExempted) {
+      const requiredItems = record.itemRecords.filter((ir) => ir.taskItem?.isRequired !== false);
+      const allDone = requiredItems.length > 0 && requiredItems.every((ir) => ir.status === "done");
+      if (allDone) {
+        stat.completed++;
+        totalCompleted++;
+      }
+    }
+
+    if (isExempted) {
+      stat.exemptions++;
+      totalExemptions++;
+    }
+  }
+
+  // 5. 计算各团队分母：该团队的 audience 人数 × dates.length
+  const teamAudienceCount = new Map<string, number>();
+  const teamOrgNameMap = new Map<string, string>(); // teamOrgId -> teamOrgName
+  for (const m of audienceMembers) {
+    const teamOrgId = m.teamOrgId ?? baseOrg.id;
+    const teamOrgName = m.teamOrgName ?? baseOrg.name;
+    teamAudienceCount.set(teamOrgId, (teamAudienceCount.get(teamOrgId) ?? 0) + 1);
+    if (!teamOrgNameMap.has(teamOrgId)) teamOrgNameMap.set(teamOrgId, teamOrgName);
+  }
+
+  const total = audienceMembers.length * dates.length;
+
+  // 补全所有在 audience 中出现的团队（即使没有任何 record，也要出现在列表里）
+  for (const [teamOrgId, teamOrgName] of teamOrgNameMap.entries()) {
+    if (!teamStatMap.has(teamOrgId)) {
+      teamStatMap.set(teamOrgId, { teamOrgId, teamOrgName, completed: 0, exemptions: 0 });
+    }
+  }
+
+  const teams = Array.from(teamStatMap.values()).map((stat) => {
+    const teamTotal = (teamAudienceCount.get(stat.teamOrgId) ?? 0) * dates.length;
+    return {
+      orgId: stat.teamOrgId,
+      orgName: stat.teamOrgName,
+      total: teamTotal,
+      completed: stat.completed,
+      exemptions: stat.exemptions,
+      completionRate: teamTotal > 0 ? Math.round((stat.completed / teamTotal) * 100) : 0,
+      exemptionRate: teamTotal > 0 ? Math.round((stat.exemptions / teamTotal) * 100) : 0,
+    };
+  }).sort((a, b) => a.orgName.localeCompare(b.orgName));
+
+  return ok(res, {
+    startDate,
+    endDate,
+    effectiveDays: dates.length,
+    baseOrg: { id: baseOrg.id, name: baseOrg.name },
+    summary: {
+      total,
+      completed: totalCompleted,
+      exemptions: totalExemptions,
+      completionRate: total > 0 ? Math.round((totalCompleted / total) * 100) : 0,
+      exemptionRate: total > 0 ? Math.round((totalExemptions / total) * 100) : 0,
+    },
+    teams,
+  });
+});
+
 reportRoutes.get("/tasks/report/daily-dashboard/halls/:hallOrgId/details", permissionRequired("task:report:view"), async (req: any, res: any) => {
   if (!canViewDailyDashboard(req.identity?.roleCode)) {
     return fail(res, "DAILY_DASHBOARD_FORBIDDEN", "当前身份无权查看日常任务看板", 403);

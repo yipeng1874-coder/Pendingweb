@@ -43,10 +43,38 @@ export async function request<T>(url: string, options: RequestInit = {}): Promis
   return body.data as T;
 }
 
+export async function requestForm<T>(url: string, formData: FormData): Promise<T> {
+  const token = useAuthStore.getState().token;
+  const identityId = useIdentityStore.getState().currentIdentity?.id;
+  const response = await fetch(`/api${url}`, {
+    method: "POST",
+    body: formData,
+    headers: {
+      // 不设置 Content-Type，让浏览器自动加 multipart boundary
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(identityId ? { "X-Identity-Id": identityId } : {}),
+    },
+  });
+  const text = await response.text();
+  let body: ApiResponse<T>;
+  try {
+    body = text ? JSON.parse(text) as ApiResponse<T> : { success: false, error: { code: "EMPTY_RESPONSE", message: "服务响应为空" } };
+  } catch {
+    throw new Error(`服务响应不是有效 JSON：${text ? text.slice(0, 120) : "空响应"}`);
+  }
+  if (!response.ok || !body.success) {
+    const error = new Error(body.error?.message ?? "请求失败") as Error & { responseBody?: ApiResponse<T> };
+    error.responseBody = body;
+    throw error;
+  }
+  return body.data as T;
+}
+
 export const api = {
   get: <T>(url: string) => request<T>(url),
   post: <T>(url: string, data?: unknown) => request<T>(url, { method: "POST", body: JSON.stringify(data ?? {}) }),
   put: <T>(url: string, data?: unknown) => request<T>(url, { method: "PUT", body: JSON.stringify(data ?? {}) }),
   patch: <T>(url: string, data?: unknown) => request<T>(url, { method: "PATCH", body: JSON.stringify(data ?? {}) }),
   delete: <T>(url: string) => request<T>(url, { method: "DELETE" }),
+  postForm: <T>(url: string, formData: FormData) => requestForm<T>(url, formData),
 };

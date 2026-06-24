@@ -147,6 +147,26 @@ model AnchorProfile {
   @@map("anchor_profiles")
 }
 
+model AnchorDailySummary {
+  id            String   @id @default(uuid())
+  baseOrgId     String   @unique @map("base_org_id")
+  baseOrgName   String   @map("base_org_name")
+  uploadDate    String   @map("upload_date")
+  uploadedBy    String   @map("uploaded_by")
+  uploaderName  String   @map("uploader_name")
+  totalCount    Int      @map("total_count")
+  onlineCount   Int      @map("online_count")
+  offlineCount  Int      @map("offline_count")
+  within7Days   Int      @map("within_7_days")
+  within30Days  Int      @map("within_30_days")
+  operatorStats Json     @map("operator_stats")
+  rawRowCount   Int      @map("raw_row_count")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  @@map("anchor_daily_summaries")
+}
+
 model Role {
   code        String           @id
   name        String

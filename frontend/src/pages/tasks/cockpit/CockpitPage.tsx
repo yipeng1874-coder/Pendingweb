@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Sparkles, AlertCircle, RefreshCw, TrendingUp, Users, CheckCircle2, Clock, Circle, ShieldOff, ChevronDown, ListTodo, Send, UserRound, Users2 } from "lucide-react";
+import { Sparkles, AlertCircle, RefreshCw, TrendingUp, Users, CheckCircle2, Clock, Circle, ShieldOff, ChevronDown, ListTodo, Send, UserRound, Users2, Calendar, X } from "lucide-react";
+import { AnchorSummaryCard } from "./AnchorSummaryCard";
 import {
   PieChart,
   Pie,
@@ -12,7 +13,7 @@ import { api } from "../../../services/http";
 import { recordApi, reportApi } from "../../../services/task";
 import { fetchOrgTree } from "../../../services/organization";
 import { useIdentityStore } from "../../../stores/identityStore";
-import type { User, OrgUnit, DailyDashboardResponse, TaskRecord } from "../../../types";
+import type { User, OrgUnit, DailyDashboardResponse, TaskRecord, DailyRangeStatsResponse } from "../../../types";
 
 /** 判断组织是否在身份权限范围内 */
 function isOrgWithinScope(org: OrgUnit, scopePath?: string | null) {
@@ -188,6 +189,80 @@ export function CockpitPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedBaseOrgId]);
 
+  // ── 历史完成率：state ────────────────────────────────────────────
+  type RangeKey = "yesterday" | "last3" | "last7" | "thisMonth";
+  const [rangeStats, setRangeStats] = useState<Record<RangeKey, DailyRangeStatsResponse | null>>({
+    yesterday: null,
+    last3: null,
+    last7: null,
+    thisMonth: null,
+  });
+  const [rangeLoading, setRangeLoading] = useState(false);
+  const [rangeError, setRangeError] = useState<string | null>(null);
+  const [expandedRangeTeams, setExpandedRangeTeams] = useState<Set<string>>(new Set());
+  // 自定义时间（融合在"本月"行）
+  const [customDateOpen, setCustomDateOpen] = useState(false);
+  const [customStart, setCustomStart] = useState("");
+  const [customEnd, setCustomEnd] = useState("");
+  const [customLabel, setCustomLabel] = useState<string | null>(null); // null = 本月模式
+  const [customLoading, setCustomLoading] = useState(false);
+
+  function getBeijingDateStr(offsetDays = 0): string {
+    const now = new Date();
+    // UTC+8
+    const bjMs = now.getTime() + 8 * 3600 * 1000;
+    const bjDate = new Date(bjMs + offsetDays * 86400 * 1000);
+    return bjDate.toISOString().slice(0, 10);
+  }
+
+  const loadRangeStats = (overrideScopeOrgId?: string) => {
+    if (!showDashboard) return;
+    const sid = overrideScopeOrgId ?? scopeOrgId;
+    if (needsBaseSelect && !sid) return;
+
+    const today = getBeijingDateStr(0);
+    const yesterday = getBeijingDateStr(-1);
+    const monthStart = `${today.slice(0, 8)}01`;
+
+    // 本月：1号到昨天；若今天是1号则 start > end，直接用 yesterday 也等于 monthStart，返回空数据
+    const ranges: Record<RangeKey, { start: string; end: string }> = {
+      yesterday: { start: yesterday, end: yesterday },
+      last3: { start: getBeijingDateStr(-3), end: yesterday },
+      last7: { start: getBeijingDateStr(-7), end: yesterday },
+      thisMonth: { start: monthStart, end: yesterday },
+    };
+
+    setRangeLoading(true);
+    setRangeError(null);
+
+    const keys = Object.keys(ranges) as RangeKey[];
+    Promise.all(
+      keys.map((key) =>
+        reportApi.getDailyRangeStats(ranges[key].start, ranges[key].end, sid).catch(() => null)
+      )
+    )
+      .then((results) => {
+        const next = { ...rangeStats };
+        keys.forEach((key, i) => { next[key] = results[i] ?? null; });
+        setRangeStats(next);
+      })
+      .catch((e) => setRangeError(e?.message ?? "历史完成率加载失败"))
+      .finally(() => setRangeLoading(false));
+  };
+
+  // 与今日看板联动：scopeOrgId / selectedBaseOrgId 变化时一起刷新
+  useEffect(() => {
+    if (needsBaseSelect) return;
+    loadRangeStats();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showDashboard, currentIdentity?.orgId]);
+
+  useEffect(() => {
+    if (!needsBaseSelect || !selectedBaseOrgId) return;
+    loadRangeStats(selectedBaseOrgId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedBaseOrgId]);
+
   // 环形图数据
   const donutData = dashboard
     ? [
@@ -203,26 +278,26 @@ export function CockpitPage() {
   return (
     <div className="space-y-5">
       {/* ── 顶部 Banner ── */}
-      <div className="relative overflow-hidden rounded-2xl bg-gradient-to-r from-feishu-blue to-[#7B9DFF] px-8 py-7 text-white shadow-[0_14px_40px_rgba(76,114,255,0.28)]">
-        <div className="relative z-10 flex items-center gap-4">
-          <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-[16px] bg-white/20 backdrop-blur-sm">
-            <Sparkles size={24} className="text-white" />
+      <div className="relative overflow-hidden rounded-2xl bg-gradient-to-r from-feishu-blue to-[#7B9DFF] px-8 py-4 text-white shadow-[0_14px_40px_rgba(76,114,255,0.28)]">
+        <div className="relative z-10 flex items-center gap-3">
+          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-white/20 backdrop-blur-sm">
+            <Sparkles size={20} className="text-white" />
           </div>
           <div>
-            <p className="text-[13px] font-medium text-white/70">成长协同</p>
-            <p className="mt-0.5 text-[20px] font-semibold leading-snug tracking-tight">
+            <p className="text-[12px] font-medium text-white/70">成长协同</p>
+            <p className="text-[17px] font-semibold leading-snug tracking-tight">
               您已陪伴千广成长系统
               {days !== null ? (
-                <span className="mx-1.5 text-[28px] font-bold tabular-nums">{days}</span>
+                <span className="mx-1.5 text-[24px] font-bold tabular-nums">{days}</span>
               ) : (
-                <span className="mx-1.5 inline-block h-7 w-10 animate-pulse rounded-md bg-white/30 align-middle" />
+                <span className="mx-1.5 inline-block h-6 w-9 animate-pulse rounded-md bg-white/30 align-middle" />
               )}
               天
             </p>
           </div>
         </div>
-        <div className="pointer-events-none absolute -right-10 -top-10 h-48 w-48 rounded-full bg-white/10" />
-        <div className="pointer-events-none absolute -bottom-8 right-24 h-32 w-32 rounded-full bg-white/10" />
+        <div className="pointer-events-none absolute -right-10 -top-10 h-40 w-40 rounded-full bg-white/10" />
+        <div className="pointer-events-none absolute -bottom-6 right-24 h-28 w-28 rounded-full bg-white/10" />
       </div>
 
       {/* ── 没有权限时不展示图表 ── */}
@@ -252,8 +327,8 @@ export function CockpitPage() {
           <div>
             <div className="mb-3 flex items-center justify-between">
               <div className="flex items-center gap-2">
-                <ListTodo size={16} className="text-feishu-blue" />
-                <span className="text-[14px] font-semibold text-slate-700">我的待办</span>
+                <ListTodo size={15} className="text-feishu-blue" />
+                <span className="text-[13px] font-semibold text-slate-700">我的待办汇总</span>
                 <span className="rounded-md bg-slate-100 px-2 py-0.5 text-[11px] text-slate-500 tabular-nums">
                   {myRecordsLoading ? "…" : `${pending.length} 项未完成`}
                 </span>
@@ -267,52 +342,32 @@ export function CockpitPage() {
             </div>
 
             {myRecordsLoading ? (
-              <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+              <div className="grid grid-cols-4 gap-2">
                 {[...Array(4)].map((_, i) => (
-                  <div key={i} className="h-28 animate-pulse rounded-2xl bg-slate-100" />
+                  <div key={i} className="h-9 animate-pulse rounded-lg bg-slate-100" />
                 ))}
               </div>
             ) : (
-              <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+              <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
                 {groups.map((g) => {
                   const prog = calcProgress(g.records);
                   return (
-                    <div key={g.key} className="flex flex-col gap-3 rounded-2xl border border-slate-100 bg-white p-4 shadow-sm">
-                      {/* 头部：图标 + 名称 + 数量 */}
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-2">
-                          <span className={`flex h-7 w-7 items-center justify-center rounded-lg ${g.bg} ${g.text}`}>{g.icon}</span>
-                          <span className="text-[13px] font-semibold text-slate-700">{g.label}</span>
-                        </div>
-                        <span className={`rounded-full px-2 py-0.5 text-[11px] font-bold ${g.bg} ${g.text}`}>
-                          {g.records.length}
-                        </span>
-                      </div>
-
-                      {/* 子任务数量 */}
-                      <div className="flex items-baseline gap-1">
-                        <span className={`text-[22px] font-bold tabular-nums leading-none ${g.text}`}>{prog.done}</span>
-                        <span className="text-[13px] text-slate-400">/ {prog.total} 子任务</span>
-                      </div>
-
+                    <div key={g.key} className="flex items-center gap-2.5 rounded-lg border border-slate-100 bg-white px-3 py-1.5 shadow-sm">
+                      {/* 图标 */}
+                      <span className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-md ${g.bg} ${g.text}`}>{g.icon}</span>
+                      {/* 名称 */}
+                      <span className="shrink-0 text-[12px] font-semibold text-slate-600 w-16">{g.label}</span>
                       {/* 进度条 */}
-                      <div>
-                        <div className="mb-1 flex items-center justify-between text-[11px]">
-                          <span className="text-slate-400">完成进度</span>
-                          <span className={`font-bold tabular-nums ${g.text}`}>{prog.pct}%</span>
-                        </div>
-                        <div className="h-1.5 w-full overflow-hidden rounded-full bg-slate-100">
-                          <div
-                            className={`h-full rounded-full bg-gradient-to-r transition-all ${g.bar}`}
-                            style={{ width: `${prog.pct}%` }}
-                          />
-                        </div>
+                      <div className="min-w-0 flex-1 h-1.5 overflow-hidden rounded-full bg-slate-100">
+                        <div
+                          className={`h-full rounded-full bg-gradient-to-r transition-all ${g.bar}`}
+                          style={{ width: `${prog.pct}%` }}
+                        />
                       </div>
-
-                      {/* 空状态 */}
-                      {g.records.length === 0 && (
-                        <p className="text-[11px] text-slate-300">暂无待处理</p>
-                      )}
+                      {/* 百分比 */}
+                      <span className={`shrink-0 text-[11px] font-bold tabular-nums ${g.text}`}>{prog.pct}%</span>
+                      {/* 数量徽章 */}
+                      <span className={`shrink-0 rounded-full px-1.5 py-0.5 text-[11px] font-bold ${g.bg} ${g.text}`}>{g.records.length}</span>
                     </div>
                   );
                 })}
@@ -325,6 +380,258 @@ export function CockpitPage() {
       {!showDashboard && (
         <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 py-16 text-center text-sm text-slate-400">
           更多模块敬请期待…
+        </div>
+      )}
+
+      {/* ── 历史待办完成率 + 主播汇总 两列并排 ── */}
+      {showDashboard && (
+        <div className="grid grid-cols-2 gap-4 items-start">
+
+      {/* ── 基地看板：历史待办完成率 ── */}
+      {(() => {
+        const RANGE_LABELS: Record<string, string> = {
+          yesterday: "昨天",
+          last3: "近3天",
+          last7: "近7天",
+          thisMonth: customLabel ?? "本月",
+        };
+        const RANGE_KEYS = ["yesterday", "last3", "last7", "thisMonth"] as const;
+
+        function RangeProgressBar({ rate, exemptRate, variant = "auto" }: { rate: number; exemptRate: number; variant?: "auto" | "blue" }) {
+          const autoColor = rate >= 95 ? "#10b981" : rate >= 80 ? "#f59e0b" : "#ef4444";
+          const color = variant === "blue" ? "#3b82f6" : autoColor;
+          return (
+            <div className="flex items-center gap-3 min-w-0">
+              <div className="flex-1 min-w-0 h-2 rounded-full bg-slate-100 overflow-hidden">
+                <div
+                  className="h-full rounded-full transition-all"
+                  style={{ width: `${rate}%`, backgroundColor: color }}
+                />
+              </div>
+              <span className="text-[13px] font-bold tabular-nums shrink-0" style={{ color }}>{rate}%</span>
+              {exemptRate > 0 && (
+                <span className="text-[11px] text-violet-500 tabular-nums shrink-0">豁免 {exemptRate}%</span>
+              )}
+            </div>
+          );
+        }
+
+        const handleCustomQuery = () => {
+          if (!customStart || !customEnd) return;
+          if (customStart > customEnd) return;
+          const sid = scopeOrgId ?? undefined;
+          setCustomLoading(true);
+          reportApi.getDailyRangeStats(customStart, customEnd, sid)
+            .then((res) => {
+              setRangeStats((prev) => ({ ...prev, thisMonth: res }));
+              setCustomLabel("自定义日期");
+              setCustomDateOpen(false);
+            })
+            .catch(() => {})
+            .finally(() => setCustomLoading(false));
+        };
+
+        const handleResetToMonth = () => {
+          setCustomLabel(null);
+          setCustomDateOpen(false);
+          // 重新用本月范围刷一次 thisMonth
+          const today = getBeijingDateStr(0);
+          const yesterday = getBeijingDateStr(-1);
+          const monthStart = `${today.slice(0, 8)}01`;
+          const sid = scopeOrgId ?? undefined;
+          reportApi.getDailyRangeStats(monthStart, yesterday, sid)
+            .then((res) => setRangeStats((prev) => ({ ...prev, thisMonth: res })))
+            .catch(() => {});
+        };
+
+        return (
+          <div className="rounded-2xl border border-slate-100 bg-white shadow-sm overflow-hidden">
+            {/* 标题行 */}
+            <div className="flex flex-wrap items-center justify-between gap-2 px-5 h-14 border-b border-slate-100">
+              <div className="flex items-center gap-2">
+                <TrendingUp size={16} className="text-feishu-blue" />
+                <span className="text-[14px] font-semibold text-slate-700">
+                  {rangeStats.yesterday?.baseOrg.name
+                    ? `${rangeStats.yesterday.baseOrg.name} · 历史待办完成率`
+                    : "基地看板 · 历史待办完成率"}
+                </span>
+              </div>
+              <div className="flex items-center gap-2">
+                {rangeError && (
+                  <span className="text-[11px] text-red-500">{rangeError}</span>
+                )}
+                <button
+                  onClick={() => loadRangeStats()}
+                  disabled={rangeLoading}
+                  className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-[12px] text-slate-600 hover:bg-slate-50 disabled:opacity-50 transition-colors"
+                >
+                  <RefreshCw size={12} className={rangeLoading ? "animate-spin" : ""} />
+                  刷新
+                </button>
+              </div>
+            </div>
+
+            {/* 各时间段行 */}
+            {rangeLoading && !rangeStats.yesterday ? (
+              <div className="space-y-0">
+                {[...Array(4)].map((_, i) => (
+                  <div key={i} className="px-5 py-4 border-b border-slate-50 last:border-0">
+                    <div className="h-4 w-full animate-pulse rounded bg-slate-100" />
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="divide-y divide-slate-50">
+                {RANGE_KEYS.map((key) => {
+                  const data = rangeStats[key];
+                  const label = RANGE_LABELS[key];
+                  const expandKey = key;
+                  const isExpanded = expandedRangeTeams.has(expandKey);
+                  const isThisMonth = key === "thisMonth";
+
+                  return (
+                    <div key={key}>
+                      {/* 主行 */}
+                      <div className="px-5 h-11 flex items-center gap-4">
+                        {/* 时间标签（本月行可点击切换自定义） */}
+                        <div className="w-40 shrink-0 flex items-center gap-1 min-w-0">
+                          <span className="text-[12px] text-slate-500 truncate">{label}</span>
+                          {isThisMonth && (
+                            <button
+                              title={customLabel ? "重置为本月" : "自定义日期"}
+                              onClick={() => {
+                                if (customLabel) {
+                                  handleResetToMonth();
+                                } else {
+                                  setCustomDateOpen((v) => !v);
+                                }
+                              }}
+                              className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] leading-none transition-colors border ${
+                                customLabel
+                                  ? "bg-slate-100 text-slate-400 border-slate-200 hover:bg-slate-200"
+                                  : "bg-blue-50 text-blue-500 border-blue-300 hover:bg-blue-100"
+                              }`}
+                            >
+                              {customLabel ? "重置" : "自定义日期"}
+                            </button>
+                          )}
+                        </div>
+
+                        {/* 进度条区域 */}
+                        <div className="flex-1 min-w-0">
+                          {!data ? (
+                            <span className="text-[12px] text-slate-300">暂无数据</span>
+                          ) : data.summary.total === 0 ? (
+                            <span className="text-[12px] text-slate-300">0 人次（暂无投放记录）</span>
+                          ) : (
+                            <RangeProgressBar
+                              rate={data.summary.completionRate}
+                              exemptRate={data.summary.exemptionRate}
+                            />
+                          )}
+                        </div>
+
+                        {/* 投放人次 */}
+                        {data && data.summary.total > 0 && (
+                          <span className="text-[11px] text-slate-400 shrink-0 tabular-nums">
+                            {data.summary.completed}/{data.summary.total} 人次
+                          </span>
+                        )}
+
+                        {/* 展开按钮 */}
+                        {data && data.teams.length > 0 && (
+                          <button
+                            onClick={() => {
+                              const next = new Set(expandedRangeTeams);
+                              if (isExpanded) next.delete(expandKey);
+                              else next.add(expandKey);
+                              setExpandedRangeTeams(next);
+                            }}
+                            className={`flex items-center gap-1 rounded-md px-2 py-0.5 text-[11px] font-medium transition-colors shrink-0 border ${
+                              isExpanded
+                                ? "border-feishu-blue/30 bg-feishu-blue/8 text-feishu-blue hover:bg-feishu-blue/15"
+                                : "border-slate-200 bg-white text-slate-500 hover:border-feishu-blue/40 hover:text-feishu-blue hover:bg-feishu-blue/5"
+                            }`}
+                          >
+                            <ChevronDown
+                              size={13}
+                              className={`transition-transform ${isExpanded ? "rotate-180" : ""}`}
+                            />
+                            {isExpanded ? "收起" : "展开"}
+                          </button>
+                        )}
+                      </div>
+
+                      {/* 本月行：自定义日期选择器（内嵌展开） */}
+                      {isThisMonth && customDateOpen && (
+                        <div className="bg-slate-50 border-t border-slate-100 px-5 py-3 flex flex-wrap items-center gap-2">
+                          <input
+                            type="date"
+                            value={customStart}
+                            onChange={(e) => setCustomStart(e.target.value)}
+                            className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-[12px] text-slate-700 focus:outline-none focus:border-feishu-blue"
+                          />
+                          <span className="text-[12px] text-slate-400">至</span>
+                          <input
+                            type="date"
+                            value={customEnd}
+                            onChange={(e) => setCustomEnd(e.target.value)}
+                            className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-[12px] text-slate-700 focus:outline-none focus:border-feishu-blue"
+                          />
+                          <button
+                            onClick={handleCustomQuery}
+                            disabled={!customStart || !customEnd || customStart > customEnd || customLoading}
+                            className="rounded-lg bg-feishu-blue px-3 py-1 text-[12px] text-white hover:opacity-90 disabled:opacity-40 transition-opacity"
+                          >
+                            {customLoading ? "查询中…" : "查询"}
+                          </button>
+                          <button
+                            onClick={() => setCustomDateOpen(false)}
+                            className="rounded-lg border border-slate-200 bg-white px-3 py-1 text-[12px] text-slate-500 hover:bg-slate-100 transition-colors"
+                          >
+                            取消
+                          </button>
+                        </div>
+                      )}
+
+                      {/* 展开的团队列表 */}
+                      {isExpanded && data && data.teams.length > 0 && (
+                        <div className="border-t border-feishu-blue/15 bg-blue-50/40 px-5 pb-3 pt-2 space-y-2">
+                          {data.teams.map((team) => (
+                            <div key={team.orgId} className="flex items-center gap-4">
+                              <span className="text-[12px] text-slate-500 w-32 shrink-0 pl-4 border-l-2 border-feishu-blue/30">
+                                {team.orgName}
+                              </span>
+                              <div className="flex-1 min-w-0">
+                                {team.total === 0 ? (
+                                  <span className="text-[11px] text-slate-300">无数据</span>
+                                ) : (
+                                  <RangeProgressBar
+                                    rate={team.completionRate}
+                                    exemptRate={team.exemptionRate}
+                                    variant="blue"
+                                  />
+                                )}
+                              </div>
+                              <span className="text-[11px] text-slate-400 shrink-0 tabular-nums">
+                                {team.completed}/{team.total}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        );
+      })()}
+
+          {/* ── 基地主播汇总卡片 ── */}
+          <AnchorSummaryCard scopeOrgId={scopeOrgId} />
+
         </div>
       )}
 
