@@ -4,6 +4,15 @@ import { useAuthStore } from "../../stores/authStore";
 import { isInFeishuApp } from "../../shared/utils/feishu";
 import type { FeishuEnterpriseConfig, User } from "../../types";
 
+type AnchorProfile = {
+  id: string;
+  douyinUid: string;
+  douyinNo: string | null;
+  nickname: string;
+  hallOrgId: string;
+  status: string;
+};
+
 export function SettingsPage() {
   const [oldPassword, setOldPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
@@ -26,6 +35,27 @@ export function SettingsPage() {
   const [selectedTeamId, setSelectedTeamId] = useState("");
   const [selectedConfigId, setSelectedConfigId] = useState("");
 
+  // 修改手机号
+  const [phoneCurrentPassword, setPhoneCurrentPassword] = useState("");
+  const [newPhone, setNewPhone] = useState("");
+  const [phoneMessage, setPhoneMessage] = useState("");
+  const [phoneError, setPhoneError] = useState("");
+  const [phoneLoading, setPhoneLoading] = useState(false);
+
+  // 修改抖音号
+  const [anchorProfiles, setAnchorProfiles] = useState<AnchorProfile[]>([]);
+  const [selectedProfileId, setSelectedProfileId] = useState("");
+  const [newDouyinNo, setNewDouyinNo] = useState("");
+  const [douyinMessage, setDouyinMessage] = useState("");
+  const [douyinError, setDouyinError] = useState("");
+  const [douyinLoading, setDouyinLoading] = useState(false);
+
+  // 折叠状态
+  const [openSection, setOpenSection] = useState<"password" | "phone" | "douyin" | null>(null);
+  function toggleSection(key: "password" | "phone" | "douyin") {
+    setOpenSection((prev) => (prev === key ? null : key));
+  }
+
   const user = useAuthStore((state) => state.user);
   const token = useAuthStore((state) => state.token);
 
@@ -35,6 +65,19 @@ export function SettingsPage() {
       .then(setFreshUser)
       .catch(() => setFreshUser(null));
   }, [bindMessage]);
+
+  // 加载当前用户绑定的主播档案
+  useEffect(() => {
+    api.get<AnchorProfile[]>("/me/anchor-profiles")
+      .then((profiles) => {
+        setAnchorProfiles(profiles);
+        if (profiles.length === 1) {
+          setSelectedProfileId(profiles[0].id);
+          setNewDouyinNo(profiles[0].douyinNo ?? "");
+        }
+      })
+      .catch(() => setAnchorProfiles([]));
+  }, [douyinMessage]);
 
   useEffect(() => {
     let cancelled = false;
@@ -145,6 +188,41 @@ export function SettingsPage() {
     };
   }, [selectedBaseId, selectedTeamId]);
 
+  async function submitPhoneChange() {
+    setPhoneMessage("");
+    setPhoneError("");
+    if (!phoneCurrentPassword || !newPhone) return setPhoneError("请填写当前密码和新手机号");
+    if (!/^1[3-9]\d{9}$/.test(newPhone)) return setPhoneError("手机号格式不正确（11位大陆手机号）");
+    setPhoneLoading(true);
+    try {
+      const updated = await api.patch<User>("/auth/update-phone", { currentPassword: phoneCurrentPassword, newPhone });
+      setPhoneMessage("手机号已修改成功");
+      setPhoneCurrentPassword("");
+      setNewPhone("");
+      setFreshUser(updated);
+    } catch (err) {
+      setPhoneError(err instanceof Error ? err.message : "修改手机号失败");
+    } finally {
+      setPhoneLoading(false);
+    }
+  }
+
+  async function submitDouyinNoChange() {
+    setDouyinMessage("");
+    setDouyinError("");
+    if (!selectedProfileId) return setDouyinError("请选择要修改的主播档案");
+    if (!newDouyinNo.trim()) return setDouyinError("请填写新抖音号");
+    setDouyinLoading(true);
+    try {
+      await api.patch(`/me/anchor-profiles/${selectedProfileId}`, { douyinNo: newDouyinNo.trim() });
+      setDouyinMessage("抖音号已修改成功");
+    } catch (err) {
+      setDouyinError(err instanceof Error ? err.message : "修改抖音号失败");
+    } finally {
+      setDouyinLoading(false);
+    }
+  }
+
   async function submitPasswordChange() {
 
     setMessage("");
@@ -241,31 +319,162 @@ export function SettingsPage() {
         </p>
       </section>
 
-      {(message || error) && (
-        <div className={`rounded-[20px] border px-4 py-3 text-sm ${error ? "border-red-100 bg-red-50 text-red-600" : "border-emerald-100 bg-emerald-50 text-emerald-700"}`}>
-          {error || message}
-        </div>
-      )}
-
-      <section className="feishu-panel p-6">
-        <h2 className="text-xl font-semibold text-slate-950">修改密码</h2>
-        <div className="mt-5 grid max-w-xl gap-4">
-          <label className="block">
-            <span className="text-xs font-medium text-slate-500">旧密码</span>
-            <input className="feishu-input mt-2" type="password" value={oldPassword} onChange={(e) => setOldPassword(e.target.value)} />
-          </label>
-          <label className="block">
-            <span className="text-xs font-medium text-slate-500">新密码</span>
-            <input className="feishu-input mt-2" type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} />
-          </label>
-          <label className="block">
-            <span className="text-xs font-medium text-slate-500">确认新密码</span>
-            <input className="feishu-input mt-2" type="password" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} />
-          </label>
-          <button className="feishu-button-primary w-full sm:w-fit" disabled={loading} onClick={submitPasswordChange}>
-            {loading ? "提交中..." : "保存新密码"}
+      {/* 折叠卡片区 */}
+      <section className="feishu-panel overflow-hidden">
+        {/* 修改密码 */}
+        <div className="border-b border-slate-100 last:border-b-0">
+          <button
+            type="button"
+            className="flex w-full items-center justify-between px-6 py-4 text-left transition hover:bg-slate-50/60"
+            onClick={() => toggleSection("password")}
+          >
+            <div>
+              <p className="text-base font-semibold text-slate-900">修改密码</p>
+              {(message || error) && (
+                <p className={`mt-0.5 text-xs ${error ? "text-red-500" : "text-emerald-600"}`}>{error || message}</p>
+              )}
+            </div>
+            <span className={`inline-flex items-center gap-1 rounded-full px-3 py-1 text-xs font-medium transition-colors duration-200 ${openSection === "password" ? "bg-blue-50 text-blue-600" : "bg-slate-100 text-slate-500 hover:bg-slate-200"}`}>
+              {openSection === "password" ? "折叠" : "展开"}
+              <svg className={`h-3 w-3 transition-transform duration-200 ${openSection === "password" ? "rotate-180" : ""}`} viewBox="0 0 20 20" fill="currentColor">
+                <path fillRule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.168l3.71-3.938a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z" clipRule="evenodd" />
+              </svg>
+            </span>
           </button>
+          {openSection === "password" && (
+            <div className="px-6 pb-6">
+              <div className="grid max-w-xl gap-4">
+                <label className="block">
+                  <span className="text-xs font-medium text-slate-500">旧密码</span>
+                  <input className="feishu-input mt-2" type="password" value={oldPassword} onChange={(e) => setOldPassword(e.target.value)} />
+                </label>
+                <label className="block">
+                  <span className="text-xs font-medium text-slate-500">新密码</span>
+                  <input className="feishu-input mt-2" type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} />
+                </label>
+                <label className="block">
+                  <span className="text-xs font-medium text-slate-500">确认新密码</span>
+                  <input className="feishu-input mt-2" type="password" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} />
+                </label>
+                <button className="feishu-button-primary w-full sm:w-fit" disabled={loading} onClick={submitPasswordChange}>
+                  {loading ? "提交中..." : "保存新密码"}
+                </button>
+              </div>
+            </div>
+          )}
         </div>
+
+        {/* 修改手机号 */}
+        <div className="border-b border-slate-100 last:border-b-0">
+          <button
+            type="button"
+            className="flex w-full items-center justify-between px-6 py-4 text-left transition hover:bg-slate-50/60"
+            onClick={() => toggleSection("phone")}
+          >
+            <div>
+              <p className="text-base font-semibold text-slate-900">修改手机号</p>
+              {(phoneMessage || phoneError) && (
+                <p className={`mt-0.5 text-xs ${phoneError ? "text-red-500" : "text-emerald-600"}`}>{phoneError || phoneMessage}</p>
+              )}
+            </div>
+            <span className={`inline-flex items-center gap-1 rounded-full px-3 py-1 text-xs font-medium transition-colors duration-200 ${openSection === "phone" ? "bg-blue-50 text-blue-600" : "bg-slate-100 text-slate-500 hover:bg-slate-200"}`}>
+              {openSection === "phone" ? "折叠" : "展开"}
+              <svg className={`h-3 w-3 transition-transform duration-200 ${openSection === "phone" ? "rotate-180" : ""}`} viewBox="0 0 20 20" fill="currentColor">
+                <path fillRule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.168l3.71-3.938a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z" clipRule="evenodd" />
+              </svg>
+            </span>
+          </button>
+          {openSection === "phone" && (
+            <div className="px-6 pb-6">
+              <p className="mb-4 text-sm text-slate-500">手机号是登录凭证，修改后请使用新手机号登录。需验证当前密码以确认身份。</p>
+              <div className="grid max-w-xl gap-4">
+                <label className="block">
+                  <span className="text-xs font-medium text-slate-500">当前密码</span>
+                  <input className="feishu-input mt-2" type="password" value={phoneCurrentPassword} onChange={(e) => setPhoneCurrentPassword(e.target.value)} placeholder="请输入当前登录密码" />
+                </label>
+                <label className="block">
+                  <span className="text-xs font-medium text-slate-500">新手机号</span>
+                  <input className="feishu-input mt-2" type="tel" value={newPhone} onChange={(e) => setNewPhone(e.target.value)} placeholder="请输入新手机号（11位）" maxLength={11} />
+                </label>
+                <button className="feishu-button-primary w-full sm:w-fit" disabled={phoneLoading} onClick={submitPhoneChange}>
+                  {phoneLoading ? "提交中..." : "保存新手机号"}
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* 修改抖音号 */}
+        {anchorProfiles.length > 0 && (
+          <div className="border-b border-slate-100 last:border-b-0">
+            <button
+              type="button"
+              className="flex w-full items-center justify-between px-6 py-4 text-left transition hover:bg-slate-50/60"
+              onClick={() => toggleSection("douyin")}
+            >
+              <div>
+                <p className="text-base font-semibold text-slate-900">修改抖音号</p>
+                {(douyinMessage || douyinError) && (
+                  <p className={`mt-0.5 text-xs ${douyinError ? "text-red-500" : "text-emerald-600"}`}>{douyinError || douyinMessage}</p>
+                )}
+              </div>
+              <span className={`inline-flex items-center gap-1 rounded-full px-3 py-1 text-xs font-medium transition-colors duration-200 ${openSection === "douyin" ? "bg-blue-50 text-blue-600" : "bg-slate-100 text-slate-500 hover:bg-slate-200"}`}>
+                {openSection === "douyin" ? "折叠" : "展开"}
+                <svg className={`h-3 w-3 transition-transform duration-200 ${openSection === "douyin" ? "rotate-180" : ""}`} viewBox="0 0 20 20" fill="currentColor">
+                  <path fillRule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.168l3.71-3.938a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z" clipRule="evenodd" />
+                </svg>
+              </span>
+            </button>
+            {openSection === "douyin" && (
+              <div className="px-6 pb-6">
+                <p className="mb-4 text-sm text-slate-500">修改当前账号绑定的主播档案的抖音号（展示用，不影响登录）。</p>
+                <div className="grid max-w-xl gap-4">
+                  {anchorProfiles.length > 1 && (
+                    <label className="block">
+                      <span className="text-xs font-medium text-slate-500">选择主播档案</span>
+                      <select
+                        className="feishu-input mt-2"
+                        value={selectedProfileId}
+                        onChange={(e) => {
+                          setSelectedProfileId(e.target.value);
+                          const profile = anchorProfiles.find((p) => p.id === e.target.value);
+                          setNewDouyinNo(profile?.douyinNo ?? "");
+                          setDouyinMessage("");
+                          setDouyinError("");
+                        }}
+                      >
+                        <option value="">请选择主播档案</option>
+                        {anchorProfiles.map((p) => (
+                          <option key={p.id} value={p.id}>{p.nickname}（{p.douyinNo || "未填写抖音号"}）</option>
+                        ))}
+                      </select>
+                    </label>
+                  )}
+                  {anchorProfiles.length === 1 && (
+                    <div className="rounded-[16px] border border-slate-100 bg-slate-50/80 px-4 py-3 text-sm text-slate-700">
+                      当前主播档案：<span className="font-medium">{anchorProfiles[0].nickname}</span>
+                      {anchorProfiles[0].douyinNo && <span className="ml-2 text-slate-400">现抖音号：{anchorProfiles[0].douyinNo}</span>}
+                    </div>
+                  )}
+                  <label className="block">
+                    <span className="text-xs font-medium text-slate-500">新抖音号</span>
+                    <input
+                      className="feishu-input mt-2"
+                      type="text"
+                      value={newDouyinNo}
+                      onChange={(e) => setNewDouyinNo(e.target.value)}
+                      placeholder="请输入新的抖音号"
+                      disabled={!selectedProfileId}
+                    />
+                  </label>
+                  <button className="feishu-button-primary w-full sm:w-fit" disabled={douyinLoading || !selectedProfileId} onClick={submitDouyinNoChange}>
+                    {douyinLoading ? "提交中..." : "保存新抖音号"}
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
       </section>
 
       <section className="feishu-panel p-6">

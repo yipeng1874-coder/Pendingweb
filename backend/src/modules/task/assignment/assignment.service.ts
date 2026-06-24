@@ -248,6 +248,23 @@ async function saveTemporaryDraft(data: any) {
       assignmentId = created.id;
     }
 
+    const currentScopePath = data.currentScopePath as string | undefined;
+    if (currentScopePath && (normalized.orgIds ?? []).length > 0) {
+      const targetOrgs = await tx.orgUnit.findMany({
+        where: { id: { in: normalized.orgIds } },
+        select: { id: true, path: true },
+      });
+      // ANCHOR 模式：orgIds 是基地级别的范围锚点，TEAM_ADMIN 的 scopePath 在基地之下，
+      // 因此允许 org.path 是 currentScopePath 的祖先（currentScopePath startsWith org.path）
+      // 或者 org.path 在 currentScopePath 范围之内（org.path startsWith currentScopePath）
+      const outOfScope = targetOrgs.filter((org: { id: string; path: string }) => {
+        const isAncestor = currentScopePath.startsWith(`${org.path}/`) || currentScopePath === org.path;
+        const isDescendant = org.path.startsWith(`${currentScopePath}/`) || org.path === currentScopePath;
+        return !isAncestor && !isDescendant;
+      });
+      if (outOfScope.length > 0) throw new Error("ASSIGNMENT_TARGETS_OUT_OF_SCOPE");
+    }
+
     await replaceTargets(tx, assignmentId, normalized.orgIds ?? []);
     await replaceExclusions(tx, assignmentId, normalized.excludedOrgIds ?? [], normalized.excludedAnchorProfileIds ?? []);
     return getTemporaryAssignmentById(tx, assignmentId);

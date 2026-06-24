@@ -47,6 +47,7 @@ model User {
   identities             UserIdentity[]
   visibleTaskRecordLinks TaskRecordIdentityLink[]
   feishuConfig           FeishuEnterpriseConfig?  @relation(fields: [feishuConfigId], references: [id])
+  exportTasks            ExportTask[]
 
   @@index([feishuConfigId])
   @@map("users")
@@ -810,4 +811,29 @@ enum HallTaskRecordStatus {
 enum HallTaskItemRecordStatus {
   pending
   done
+}
+
+enum ExportTaskStatus {
+  pending
+  processing
+  done
+  failed
+}
+
+model ExportTask {
+  id        String           @id @default(uuid())
+  type      String           // "anchor_profiles"
+  status    ExportTaskStatus @default(pending)
+  params    Json             // 导出参数快照
+  filePath  String?          @map("file_path")
+  rowCount  Int?             @map("row_count")
+  errorMsg  String?          @map("error_msg") @db.Text
+  creatorId String           @map("creator_id")
+  creator   User             @relation(fields: [creatorId], references: [id])
+  createdAt DateTime         @default(now()) @map("created_at")
+  expiresAt DateTime         @map("expires_at")
+
+  @@index([creatorId, type, status])
+  @@index([expiresAt])
+  @@map("export_tasks")
 }

@@ -3,6 +3,7 @@ import { authRequired } from "../../middleware/authRequired.js";
 import { identityRequired } from "../../middleware/identityRequired.js";
 import { permissionRequired } from "../../middleware/permissionRequired.js";
 import { AnchorController } from "./controller.js";
+import { ExportTaskController } from "./export-task.controller.js";
 
 export const anchorRoutes = Router();
 
@@ -16,6 +17,7 @@ anchorRoutes.use(authRequired, identityRequired);
 
 anchorRoutes.get("/anchors/org-children", permissionRequired("org:view"), AnchorController.getOrgChildren);
 anchorRoutes.get("/anchors/profiles", permissionRequired("anchor:view"), AnchorController.getProfiles);
+anchorRoutes.get("/anchors/profiles/export", permissionRequired("anchor:view"), AnchorController.exportProfiles);
 anchorRoutes.get("/anchors/profiles/:id", permissionRequired("anchor:view"), AnchorController.getProfileDetail);
 anchorRoutes.post("/anchors/profiles", permissionRequired("anchor:profile:create"), AnchorController.createProfile);
 anchorRoutes.patch("/anchors/profiles/:id", permissionRequired("anchor:profile:create"), AnchorController.updateProfile);
@@ -27,3 +29,8 @@ anchorRoutes.get("/anchors/applications", permissionRequired("anchor:registratio
 anchorRoutes.get("/anchors/applications/:id", permissionRequired("anchor:registration:review"), AnchorController.getApplicationDetail);
 anchorRoutes.get("/anchors/applications/:id/candidates", permissionRequired("anchor:registration:review"), AnchorController.getCandidates);
 anchorRoutes.post("/anchors/applications/:id/review", permissionRequired("anchor:registration:review"), AnchorController.reviewApplication);
+
+// 异步导出任务
+anchorRoutes.post("/anchors/export-tasks", permissionRequired("anchor:view"), ExportTaskController.createTask);
+anchorRoutes.get("/anchors/export-tasks", permissionRequired("anchor:view"), ExportTaskController.listMyTasks);
+anchorRoutes.get("/anchors/export-tasks/:id/file", permissionRequired("anchor:view"), ExportTaskController.downloadFile);

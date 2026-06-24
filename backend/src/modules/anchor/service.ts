@@ -408,6 +408,101 @@ export const AnchorService = {
     };
   },
 
+  async exportProfiles(input: { keyword: string; orgId?: string; status: string; scopePath?: string; roleCode?: string }) {
+    const MAX_EXPORT = 5000;
+    const normalizedKeyword = input.keyword.trim();
+    const selectedOrg = input.orgId
+      ? await prisma.orgUnit.findUnique({ where: { id: input.orgId }, select: { id: true, path: true, orgType: true } })
+      : null;
+    const selectedScopePath = selectedOrg?.path;
+    const effectiveScopePath = selectedScopePath || (input.roleCode !== "DEV_ADMIN" ? input.scopePath : undefined);
+
+    let hallFilter: Prisma.AnchorProfileWhereInput = {};
+    if (selectedOrg?.orgType === "HALL") {
+      hallFilter = { hallOrgId: selectedOrg.id };
+    } else if (effectiveScopePath) {
+      hallFilter = {
+        hallOrg: {
+          path: { startsWith: effectiveScopePath.endsWith("/") ? effectiveScopePath : `${effectiveScopePath}/` },
+        },
+      };
+    }
+
+    const where: Prisma.AnchorProfileWhereInput = {
+      ...hallFilter,
+      ...(input.status ? { status: input.status as "unbound" | "bound" | "inactive" } : {}),
+      ...(normalizedKeyword
+        ? {
+            OR: [
+              { nickname: { contains: normalizedKeyword } },
+              { douyinNo: { contains: normalizedKeyword } },
+              { douyinUid: { contains: normalizedKeyword } },
+              { boundUserId: { not: null }, identities: { some: { user: { phone: { contains: normalizedKeyword } } } } },
+              { boundUserId: { not: null }, identities: { some: { user: { nickname: { contains: normalizedKeyword } } } } },
+            ],
+          }
+        : {}),
+    };
+
+    const profiles = await prisma.anchorProfile.findMany({
+      where,
+      include: {
+        hallOrg: {
+          select: { id: true, name: true, orgCode: true, douyinNo: true, douyinUid: true, path: true },
+        },
+        identities: {
+          where: { roleCode: "ANCHOR" },
+          include: { user: { select: { id: true, phone: true, nickname: true, status: true } } },
+          orderBy: { grantedAt: "desc" },
+          take: 1,
+        },
+      },
+      orderBy: [{ hallOrgId: "asc" }, { createdAt: "desc" }],
+      take: MAX_EXPORT,
+    });
+
+    // 从 hallOrg.path 批量提取 BASE、TEAM 的 orgCode，一次性查出名称
+    // path 格式示例: /hq-001/base-001/team-001/hall-001 → parts[1]=BASE, parts[2]=TEAM
+    const allPaths = [...new Set(profiles.map((p) => p.hallOrg?.path).filter(Boolean))] as string[];
+    const ancestorOrgCodes = new Set<string>();
+    for (const path of allPaths) {
+      const parts = path.split("/").filter(Boolean);
+      if (parts[1]) ancestorOrgCodes.add(parts[1]);
+      if (parts[2]) ancestorOrgCodes.add(parts[2]);
+    }
+
+    const ancestorOrgs = ancestorOrgCodes.size
+      ? await prisma.orgUnit.findMany({
+          where: { orgCode: { in: [...ancestorOrgCodes] }, orgType: { in: ["BASE", "TEAM"] } },
+          select: { orgCode: true, orgType: true, name: true },
+        })
+      : [];
+
+    const baseMap = new Map(ancestorOrgs.filter((o) => o.orgType === "BASE").map((o) => [o.orgCode, o.name]));
+    const teamMap = new Map(ancestorOrgs.filter((o) => o.orgType === "TEAM").map((o) => [o.orgCode, o.name]));
+
+    return profiles.map((profile) => {
+      const path = profile.hallOrg?.path ?? "";
+      const parts = path.split("/").filter(Boolean);
+      const baseCode = parts[1] ?? "";
+      const teamCode = parts[2] ?? "";
+      const boundUser = profile.identities[0]?.user ?? null;
+
+      return {
+        baseName:      baseMap.get(baseCode) ?? "",
+        baseCode,
+        teamName:      teamMap.get(teamCode) ?? "",
+        teamCode,
+        hallName:      profile.hallOrg?.name ?? "",
+        hallDouyinUid: profile.hallOrg?.douyinUid ?? "",
+        nickname:      profile.nickname,
+        phone:         boundUser?.phone ?? "",
+        douyinNo:      profile.douyinNo ?? "",
+        douyinUid:     profile.douyinUid,
+      };
+    });
+  },
+
   async createProfile(data: any) {
     const nickname = String(data.nickname ?? "").trim();
     const douyinNo = toTrimmedNullable(data.douyinNo);

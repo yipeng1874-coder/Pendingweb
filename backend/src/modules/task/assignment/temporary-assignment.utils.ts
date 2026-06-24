@@ -36,6 +36,7 @@ type AssignmentShape = {
   targetUserIds?: unknown;
   temporaryMode?: TemporaryMode | null;
   temporarySubjectOrgType?: OrgType | null;
+  ownerScopePath?: string | null;
 };
 
 type TargetShape = { orgPathSnapshot: string; orgId?: string | null };
@@ -216,7 +217,19 @@ export async function buildTemporarySubjectGroups(
   }
 
   const roleCodes = resolveTemporaryRoleCodes(assignment);
-  const identities = filterExcludedIdentities(await listIdentitiesByTargetPaths(tx, targetPaths, roleCodes), exclusions);
+  const ownerScopePath = assignment.ownerScopePath ?? null;
+  let identities = filterExcludedIdentities(await listIdentitiesByTargetPaths(tx, targetPaths, roleCodes), exclusions);
+
+  // 层2：发起者权限范围收窄
+  // 若 ownerScopePath 存在（非超级管理员），则只保留 scopePath 在发起者权限范围内的执行者
+  // 这样 TEAM_ADMIN 用基地 orgId 发 ANCHOR/MANAGER 任务时，不会拉到其他团队的执行者
+  if (ownerScopePath) {
+    identities = identities.filter((identity) => {
+      const sp = identity.scopePath;
+      if (!sp) return false;
+      return sp === ownerScopePath || sp.startsWith(`${ownerScopePath}/`);
+    });
+  }
 
   if (mode !== "MANAGER") {
     const grouped = new Map<string, SubjectGroup>();

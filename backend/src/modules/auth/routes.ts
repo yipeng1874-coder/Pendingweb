@@ -303,6 +303,20 @@ authRoutes.post("/change-password", authRequired, async (req, res) => {
   return ok(res, { changed: true });
 });
 
+authRoutes.patch("/update-phone", authRequired, async (req, res) => {
+  const { currentPassword, newPhone } = req.body as { currentPassword?: string; newPhone?: string };
+  if (!currentPassword || !newPhone) return fail(res, "PARAMS_REQUIRED", "请填写当前密码和新手机号", 400);
+  if (!/^1[3-9]\d{9}$/.test(newPhone)) return fail(res, "PHONE_INVALID", "手机号格式不正确", 400);
+  const user = await prisma.user.findUnique({ where: { id: req.userId! } });
+  if (!user) return fail(res, "ACCOUNT_NOT_FOUND", "账号不存在", 404);
+  const valid = await bcrypt.compare(currentPassword, user.passwordHash);
+  if (!valid) return fail(res, "PASSWORD_INCORRECT", "当前密码错误", 400);
+  const duplicated = await prisma.user.findFirst({ where: { phone: newPhone, id: { not: user.id } } });
+  if (duplicated) return fail(res, "PHONE_TAKEN", "该手机号已被其他账号使用", 409);
+  const updated = await prisma.user.update({ where: { id: user.id }, data: { phone: newPhone } });
+  return ok(res, safeUser(updated));
+});
+
 let cachedTickets = new Map<string, { ticket: string; expiresAt: number }>();
 
 async function getJsapiTicket(config: FeishuConfigRecord): Promise<string> {

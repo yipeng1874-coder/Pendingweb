@@ -68,6 +68,17 @@ export const AnchorController = {
     return ok(res, data);
   },
 
+  async exportProfiles(req: any, res: any) {
+    const rows = await AnchorService.exportProfiles({
+      keyword:   text(req.query.keyword),
+      orgId:     text(req.query.orgId) || undefined,
+      status:    text(req.query.status),
+      scopePath: req.identity?.scopePath,
+      roleCode:  req.identity?.roleCode,
+    });
+    return ok(res, rows);
+  },
+
   async getProfileDetail(req: any, res: any) {
     const profile = await AnchorService.getProfileDetail(req.params.id, req.identity?.scopePath, req.identity?.roleCode);
     if (!profile) return fail(res, "ANCHOR_PROFILE_NOT_FOUND", "主播档案不存在或无权查看", 404);

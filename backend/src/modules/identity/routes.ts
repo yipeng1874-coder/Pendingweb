@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { authRequired } from "../../middleware/authRequired.js";
 import { identityRequired } from "../../middleware/identityRequired.js";
-import { ok } from "../../shared/response.js";
+import { ok, fail } from "../../shared/response.js";
 import { prisma } from "../../shared/prisma.js";
 
 export const identityRoutes = Router();
@@ -27,4 +27,42 @@ identityRoutes.get("/me", authRequired, async (req, res) => {
   if (!user) return ok(res, null);
   const { passwordHash: _ph, ...safeU } = user as any;
   return ok(res, safeU);
+});
+
+// 获取当前用户绑定的所有主播档案（含抖音号）
+identityRoutes.get("/me/anchor-profiles", authRequired, async (req, res) => {
+  const identities = await prisma.userIdentity.findMany({
+    where: { userId: req.userId!, roleCode: "ANCHOR", status: "active", anchorProfileId: { not: null } },
+    include: { anchorProfile: true },
+    orderBy: { grantedAt: "desc" },
+  });
+  const profiles = identities
+    .filter((item) => item.anchorProfile)
+    .map((item) => item.anchorProfile!);
+  return ok(res, profiles);
+});
+
+// 修改指定主播档案的抖音号（仅允许修改自己绑定的档案）
+identityRoutes.patch("/me/anchor-profiles/:id", authRequired, async (req, res) => {
+  const profileId = req.params.id;
+  const newDouyinNo = typeof req.body?.douyinNo === "string" ? req.body.douyinNo.trim() : "";
+  if (!newDouyinNo) return fail(res, "DOUYIN_NO_REQUIRED", "请填写抖音号", 400);
+
+  // 验证该档案归属当前用户
+  const identity = await prisma.userIdentity.findFirst({
+    where: { userId: req.userId!, roleCode: "ANCHOR", anchorProfileId: profileId, status: "active" },
+  });
+  if (!identity) return fail(res, "ANCHOR_PROFILE_FORBIDDEN", "该主播档案不属于当前账号或已停用", 403);
+
+  // 查重：检查该抖音号是否已被其他主播档案使用
+  const duplicated = await prisma.anchorProfile.findFirst({
+    where: { douyinNo: newDouyinNo, id: { not: profileId } },
+  });
+  if (duplicated) return fail(res, "DOUYIN_NO_TAKEN", "该抖音号已被其他主播档案使用", 409);
+
+  const updated = await prisma.anchorProfile.update({
+    where: { id: profileId },
+    data: { douyinNo: newDouyinNo },
+  });
+  return ok(res, updated);
 });

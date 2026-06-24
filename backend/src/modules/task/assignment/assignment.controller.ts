@@ -16,6 +16,7 @@ function handleAssignmentError(res: any, error: any) {
   if (error.message === "ASSIGNMENT_NOT_DRAFT") return fail(res, "ASSIGNMENT_NOT_DRAFT", "只有草稿任务可以继续编辑或执行发放", 400);
   if (error.message === "ASSIGNMENT_CATEGORY_INVALID") return fail(res, "ASSIGNMENT_CATEGORY_INVALID", "当前任务类型不支持该操作", 400);
   if (error.message === "ASSIGNMENT_TARGETS_REQUIRED") return fail(res, "ASSIGNMENT_TARGETS_REQUIRED", "请至少保留一个有效发放范围", 400);
+  if (error.message === "ASSIGNMENT_TARGETS_OUT_OF_SCOPE") return fail(res, "ASSIGNMENT_TARGETS_OUT_OF_SCOPE", "选择的发放范围超出当前身份管理权限", 403);
   if (error.message === "TEMP_ASSIGNMENT_DEADLINE_REQUIRED") return fail(res, "TEMP_ASSIGNMENT_DEADLINE_REQUIRED", "临时任务必须设置完成截止时间", 400);
   if (error.message === "TEMP_ASSIGNMENT_OWNER_REQUIRED") return fail(res, "TEMP_ASSIGNMENT_OWNER_REQUIRED", "只有发起人可以继续处理、关闭或删除该临时任务", 403);
   if (error.message === "TEMP_ASSIGNMENT_AUDIENCE_EMPTY") return fail(res, "TEMP_ASSIGNMENT_AUDIENCE_EMPTY", "当前模式和范围下没有可触达的任务主体", 400);

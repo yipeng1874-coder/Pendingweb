@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AlertCircle } from "lucide-react";
 import { AnchorAccountTable } from "../../features/anchors/components/AnchorAccountTable";
 import { AnchorAccountDrawer } from "../../features/anchors/components/AnchorAccountDrawer";
 import { AnchorAccountFilters } from "../../features/anchors/components/AnchorAccountFilters";
+import { ExportTasksModal } from "../../features/anchors/components/ExportTasksModal";
 import { useAnchorAccounts } from "../../features/anchors/hooks/useAnchorAccounts";
 import { OrgTree } from "../../shared/components/tree/OrgTree";
 import { ORG_TREE_SIDEBAR_WIDTH } from "../../shared/constants/layout";
@@ -63,7 +64,50 @@ export function AnchorAccountsPage() {
   const [activeAnchorId, setActiveAnchorId] = useState("");
   const [activeAnchorDetail, setActiveAnchorDetail] = useState<typeof filteredAnchors[number] | null>(null);
   const [toast, setToast] = useState<{ text: string; type: "success" | "error" } | null>(null);
+  const [exporting, setExporting] = useState(false);
   const [collapsedIds, setCollapsedIds] = useState<Set<string>>(new Set());
+
+  // 异步导出任务状态
+  type ExportTask = {
+    id: string;
+    status: "pending" | "processing" | "done" | "failed";
+    rowCount: number | null;
+    filePath: string | null;
+    errorMsg: string | null;
+    createdAt: string;
+    expiresAt: string;
+    params: Record<string, string>;
+  };
+  const [exportTasks, setExportTasks] = useState<ExportTask[]>([]);
+  const [showExportModal, setShowExportModal] = useState(false);
+  const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const loadExportTasks = useCallback(async () => {
+    try {
+      const tasks = await anchorApi.listExportTasks();
+      setExportTasks(tasks);
+    } catch { /* 静默失败 */ }
+  }, []);
+
+  // 页面加载时查询一次任务列表
+  useEffect(() => {
+    void loadExportTasks();
+  }, [loadExportTasks]);
+
+  // 有 pending/processing 任务时轮询
+  useEffect(() => {
+    const hasPending = exportTasks.some((t) => t.status === "pending" || t.status === "processing");
+    if (hasPending) {
+      pollTimerRef.current = setTimeout(() => void loadExportTasks(), 4000);
+    }
+    return () => {
+      if (pollTimerRef.current) clearTimeout(pollTimerRef.current);
+    };
+  }, [exportTasks, loadExportTasks]);
+
+  const pendingExportCount = exportTasks.filter(
+    (t) => t.status === "pending" || t.status === "processing"
+  ).length;
   const hasInitializedCollapsedIdsRef = useRef(false);
   const emptyText = selectedOrgId ? "当前筛选条件下暂无主播账号" : "请先从左侧组织树选择组织后查看主播账号";
   const orgTreeWidth = useMemo(() => ORG_TREE_SIDEBAR_WIDTH.anchorAccounts, []);
@@ -128,6 +172,32 @@ export function AnchorAccountsPage() {
     setActiveAnchorId("");
     setActiveAnchorDetail(null);
     setEditing(undefined);
+  }
+
+  async function handleExport() {
+    if (!selectedOrgId) {
+      setToast({ text: "请先选择左侧组织后再导出", type: "error" });
+      return;
+    }
+    setExporting(true);
+    try {
+      await anchorApi.createExportTask({
+        orgId: selectedOrgId,
+        ...(keyword ? { keyword } : {}),
+        ...(status ? { status } : {}),
+      });
+      setToast({ text: '导出任务已提交，点击「导出记录」可查看进度并下载', type: "success" });
+      // 立即刷新任务列表（此时应为 pending 状态）
+      await loadExportTasks();
+    } catch (err: any) {
+      if (err?.code === "EXPORT_TASK_IN_PROGRESS") {
+        setToast({ text: "上次导出任务还在处理中，请稍候再试", type: "error" });
+      } else {
+        setToast({ text: err instanceof Error ? err.message : "提交导出任务失败，请重试", type: "error" });
+      }
+    } finally {
+      setExporting(false);
+    }
   }
 
   function handleSelectOrg(orgId: string) {
@@ -197,6 +267,11 @@ export function AnchorAccountsPage() {
               status={status}
               setStatus={setStatus}
               onRefresh={load}
+              onExport={handleExport}
+              onOpenExportTasks={() => setShowExportModal(true)}
+              exporting={exporting}
+              canExport={!!selectedOrgId}
+              pendingExportCount={pendingExportCount}
             />
           </div>
 
@@ -233,6 +308,14 @@ export function AnchorAccountsPage() {
           </div>
         </section>
       </div>
+
+      {/* 导出记录弹窗 */}
+      {showExportModal && (
+        <ExportTasksModal
+          onClose={() => { setShowExportModal(false); void loadExportTasks(); }}
+          onToast={setToast}
+        />
+      )}
 
       {/* Toast */}
       {toast && (
