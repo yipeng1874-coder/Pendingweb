@@ -1234,6 +1234,14 @@ export function DailyTaskWizard({
           setSelectedTemplateId(template.id);
         }}
         onSavedAndNext={async (template) => {
+          // 与 Step1 主按钮保持一致：存在待生效任务时禁止进入下一步
+          if (scheduledAssignments.length > 0) {
+            window.alert("当前存在待生效任务，请先在「待生效」列中取消，再继续操作。");
+            setEditorOpen(false);
+            await onReload();
+            setSelectedTemplateId(template.id);
+            return;
+          }
           setDraftAssignmentId("");
           setExcludedOrgIds([]);
           setExcludedAnchorProfileIds([]);

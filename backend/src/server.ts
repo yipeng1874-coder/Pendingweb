@@ -3,6 +3,7 @@ import path from "path";
 import { createApp } from "./app.js";
 import { env } from "./config/env.js";
 import { reconcileTemporaryAssignments } from "./modules/task/assignment/assignment.service.js";
+import { activateHallDailyScheduled, ensureHallDailyRecordsForToday } from "./modules/task/hall-daily/hall-daily.service.js";
 import { runDailyNotifyScheduleTick } from "./modules/task/notify/notify.routes.js";
 import { runTemporaryNotifyScheduleTick } from "./modules/task/notify/temporary-notify-schedule.routes.js";
 import { ensureTaskAssignmentSchemaCompatibility } from "./shared/task-assignment-schema-compat.js";
@@ -93,12 +94,36 @@ function startTemporaryNotifyScheduler() {
   }, intervalMs);
 }
 
+function startHallDailyActivator() {
+  const intervalMs = 60 * 1000;
+  const tick = async () => {
+    const activateResult = await activateHallDailyScheduled().catch((err) => {
+      console.error("[hall-daily] 定时激活失败", err);
+      return { activated: 0 };
+    });
+    if (activateResult.activated > 0) {
+      console.log(`[hall-daily] 已激活 ${activateResult.activated} 个厅管日常任务`);
+    }
+
+    const recordResult = await ensureHallDailyRecordsForToday().catch((err) => {
+      console.error("[hall-daily] 每日 Record 创建失败", err);
+      return { created: 0 };
+    });
+    if (recordResult.created > 0) {
+      console.log(`[hall-daily] 已为今日新建 ${recordResult.created} 条厅管执行记录`);
+    }
+  };
+  void tick();
+  setInterval(() => void tick(), intervalMs);
+}
+
 async function bootstrap() {
   // 确保上传目录存在
   fs.mkdirSync(path.join(process.cwd(), "uploads", "tasks"), { recursive: true });
 
   await ensureTaskAssignmentSchemaCompatibility();
   startTemporaryAssignmentReconciler();
+  startHallDailyActivator();
   startDailyNotifyScheduler();
   startTemporaryNotifyScheduler();
 

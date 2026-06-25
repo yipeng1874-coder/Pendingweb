@@ -213,10 +213,9 @@ async function buildDailyNotifyAudience(taskDate: string, baseOrg: { id: string;
     where: {
       category: "DAILY",
       targets: { some: { orgId: baseOrg.id } },
-      status: { in: ["scheduled", "active", "ended"] },
+      status: { in: ["active"] },
       deletedAt: null,
       effectiveAt: { lte: getDailyTaskSupplementDeadline(normalizedDate) },
-      OR: [{ endedAt: null }, { endedAt: { gte: getDailyTaskDayEnd(normalizedDate) } }],
     },
     include: {
       targets: true,

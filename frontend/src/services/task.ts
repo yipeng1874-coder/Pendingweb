@@ -338,6 +338,50 @@ export const notifyApi = {
 
 // ─── 厅管日常任务独立 API（对接 /api/hall-daily/* 路由） ─────────────────────
 
+// ── 执行层类型 ──
+export type HallTaskItemRecord = {
+  id: string;
+  taskRecordId: string;
+  taskItemId: string;
+  status: "pending" | "done";
+  answerText?: string | null;
+  answerOptions?: string[] | null;
+  isLinkConfirmed: boolean;
+  doneAt?: string | null;
+  doneBy?: string | null;
+};
+
+export type HallTaskRecord = {
+  id: string;
+  assignmentId: string;
+  hallOrgId: string;
+  hallOrg?: { id: string; name: string } | null;
+  recordDate: string;
+  status: "pending" | "in_progress" | "submitted" | "overdue";
+  totalItems: number;
+  doneItems: number;
+  submittedAt?: string | null;
+  submittedBy?: string | null;
+  assignment?: {
+    id: string;
+    status: string;
+    template?: {
+      id: string;
+      title: string;
+      items: Array<{
+        id: string;
+        sortOrder: number;
+        itemType: string;
+        title: string;
+        isRequired: boolean;
+        linkUrl?: string | null;
+        options: Array<{ id: string; sortOrder: number; label: string }>;
+      }>;
+    };
+  };
+  itemRecords?: HallTaskItemRecord[];
+};
+
 export type HallTaskTemplate = {
   id: string;
   title: string;
@@ -381,7 +425,7 @@ export type HallTaskAssignment = {
 
 export const hallDailyApi = {
   // ── 模板 ──
-  listTemplates: (params?: { teamOrgId?: string; status?: string; limit?: number; offset?: number }) =>
+  listTemplates: (params?: { teamOrgId?: string; status?: string; neverPublished?: boolean; limit?: number; offset?: number }) =>
     api.get<HallTaskTemplate[]>(`/hall-daily/templates${buildQuery(params)}`),
   getTemplateById: (id: string, teamOrgId?: string) =>
     api.get<HallTaskTemplate>(`/hall-daily/templates/${id}${buildQuery({ teamOrgId })}`),
@@ -393,8 +437,6 @@ export const hallDailyApi = {
     api.delete<{ deleted: boolean; id: string }>(`/hall-daily/templates/${id}${buildQuery({ teamOrgId })}`),
   copyTemplate: (id: string, teamOrgId?: string) =>
     api.post<HallTaskTemplate>(`/hall-daily/templates/${id}/copy${buildQuery({ teamOrgId })}`),
-  publishTemplate: (id: string, teamOrgId?: string) =>
-    api.post<HallTaskTemplate>(`/hall-daily/templates/${id}/publish${buildQuery({ teamOrgId })}`),
   archiveTemplate: (id: string, teamOrgId?: string) =>
     api.post<HallTaskTemplate>(`/hall-daily/templates/${id}/archive${buildQuery({ teamOrgId })}`),
 
@@ -419,6 +461,22 @@ export const hallDailyApi = {
     api.post<HallTaskAssignment>(`/hall-daily/assignments/${id}/close`, { teamOrgId }),
   deleteAssignment: (id: string, teamOrgId?: string) =>
     api.delete<{ deleted: boolean; id: string }>(`/hall-daily/assignments/${id}${buildQuery({ teamOrgId })}`),
+
+  // ── 执行层（厅管填报）──
+  getMyRecords: () =>
+    api.get<HallTaskRecord[]>("/hall-daily/my-records"),
+
+  submitItemRecord: (data: {
+    taskRecordId: string;
+    taskItemId: string;
+    answerText?: string;
+    answerOptions?: string[];
+    isLinkConfirmed?: boolean;
+    done: boolean;
+  }) => api.post<HallTaskItemRecord>("/hall-daily/item-records", data),
+
+  submitRecord: (id: string) =>
+    api.post<HallTaskRecord>(`/hall-daily/my-records/${id}/submit`),
 };
 
 export const reportApi = {

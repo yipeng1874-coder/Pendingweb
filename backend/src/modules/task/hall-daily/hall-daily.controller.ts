@@ -1,5 +1,5 @@
 import { fail, ok } from "../../../shared/response.js";
-import { HallDailyAssignmentService, HallDailyTemplateService } from "./hall-daily.service.js";
+import { HallDailyAssignmentService, HallDailyRecordService, HallDailyTemplateService } from "./hall-daily.service.js";
 
 const t = (v: any): string => (typeof v === "string" ? v.trim() : "");
 
@@ -13,10 +13,9 @@ function handleHallDailyError(res: any, error: any) {
     HALL_DAILY_HALL_NOT_IN_TEAM:            ["所选厅不属于当前团队", 400],
     HALL_TASK_TEMPLATE_NOT_FOUND:           ["表单模板不存在", 404],
     HALL_TASK_TEMPLATE_IN_USE:              ["该模板已有生效或待生效任务，无法修改题目", 400],
-    HALL_TASK_TEMPLATE_HAS_ASSIGNMENTS:     ["该模板已有发布记录，无法删除", 400],
-    HALL_TASK_TEMPLATE_ARCHIVED:            ["该模板已归档", 400],
+    HALL_TASK_TEMPLATE_HAS_ASSIGNMENTS:     ["该模板存在已发布或已结束的任务记录，无法删除", 400],
+    HALL_TASK_TEMPLATE_ARCHIVED:            ["该模板已归档，无法使用", 400],
     HALL_TASK_TEMPLATE_NO_ITEMS:            ["模板中至少需要一道题目才能发布", 400],
-    HALL_TASK_TEMPLATE_NOT_PUBLISHED:       ["只有已发布状态的模板才能创建任务", 400],
     HALL_TASK_TEMPLATE_TEAM_MISMATCH:       ["模板不属于当前团队", 400],
     HALL_TASK_LINK_URL_REQUIRED:            ["学习链接题型必须填写跳转地址", 400],
     HALL_TASK_LINK_URL_INVALID:             ["学习链接格式无效，请填写完整网址", 400],
@@ -25,6 +24,11 @@ function handleHallDailyError(res: any, error: any) {
     HALL_TASK_ASSIGNMENT_TARGETS_REQUIRED:  ["请选择至少一个目标厅", 400],
     HALL_TASK_ASSIGNMENT_CANNOT_CLOSE:      ["只有生效中或待生效的任务才能结束", 400],
     HALL_TASK_ASSIGNMENT_SCHEDULED_EXISTS:  ["当前团队已有一个待生效任务，请先处理", 400],
+    HALL_TASK_IDENTITY_REQUIRED:            ["当前身份没有关联直播厅", 403],
+    HALL_TASK_RECORD_NOT_FOUND:             ["记录不存在或无权访问", 404],
+    HALL_TASK_RECORD_ALREADY_SUBMITTED:     ["该任务已提交，不可重复提交", 400],
+    HALL_TASK_RECORD_INCOMPLETE:            ["还有必填题目未完成，无法提交", 400],
+    HALL_TASK_SUPPLEMENT_DEADLINE_PASSED:   ["已超过补录截止时间（次日 16:00）", 400],
   };
 
   const entry = map[error?.message];
@@ -42,6 +46,7 @@ export const HallDailyTemplateController = {
       const data = await HallDailyTemplateService.list({
         teamOrgId: t(req.query.teamOrgId) || undefined,
         status: t(req.query.status) || undefined,
+        neverPublished: req.query.neverPublished === "true" ? true : undefined,
         scopePath: req.identity?.scopePath,
         roleCode: req.identity?.roleCode,
         limit: Number(req.query.limit) || undefined,
@@ -121,20 +126,6 @@ export const HallDailyTemplateController = {
       const result = await HallDailyTemplateService.copy(
         req.params.id,
         req.userId,
-        req.identity?.scopePath,
-        req.identity?.roleCode,
-        t(req.query.teamOrgId) || undefined
-      );
-      return ok(res, result);
-    } catch (error: any) {
-      return handleHallDailyError(res, error);
-    }
-  },
-
-  async publish(req: any, res: any) {
-    try {
-      const result = await HallDailyTemplateService.publish(
-        req.params.id,
         req.identity?.scopePath,
         req.identity?.roleCode,
         t(req.query.teamOrgId) || undefined
@@ -254,6 +245,47 @@ export const HallDailyAssignmentController = {
         req.identity?.roleCode,
         t(req.query.teamOrgId) || undefined
       );
+      return ok(res, result);
+    } catch (error: any) {
+      return handleHallDailyError(res, error);
+    }
+  },
+};
+
+// ─── 执行层 Controller（厅管填报） ────────────────────────────────────────────
+
+export const HallDailyRecordController = {
+
+  async getMyRecords(req: any, res: any) {
+    try {
+      const records = await HallDailyRecordService.getMyRecords(req.userId);
+      return ok(res, records);
+    } catch (error: any) {
+      return handleHallDailyError(res, error);
+    }
+  },
+
+  async submitItemRecord(req: any, res: any) {
+    try {
+      const { taskRecordId, taskItemId, answerText, answerOptions, isLinkConfirmed, done } = req.body;
+      const result = await HallDailyRecordService.submitItemRecord({
+        taskRecordId,
+        taskItemId,
+        userId: req.userId,
+        answerText: typeof answerText === "string" ? answerText : undefined,
+        answerOptions: Array.isArray(answerOptions) ? answerOptions : undefined,
+        isLinkConfirmed: typeof isLinkConfirmed === "boolean" ? isLinkConfirmed : undefined,
+        done: Boolean(done),
+      });
+      return ok(res, result);
+    } catch (error: any) {
+      return handleHallDailyError(res, error);
+    }
+  },
+
+  async submitRecord(req: any, res: any) {
+    try {
+      const result = await HallDailyRecordService.submitRecord(req.params.id, req.userId);
       return ok(res, result);
     } catch (error: any) {
       return handleHallDailyError(res, error);

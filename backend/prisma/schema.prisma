@@ -795,7 +795,6 @@ model HallTaskItemRecord {
 
 enum HallTaskTemplateStatus {
   draft
-  published
   archived
 }
 

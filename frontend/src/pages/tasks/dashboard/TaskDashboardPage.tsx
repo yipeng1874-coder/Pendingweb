@@ -1,9 +1,10 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Bell, CheckCircle2, ChevronDown, ChevronUp, ExternalLink, GitBranch, Megaphone, Plus, RefreshCw, Send, Sparkles, UserRound, Users2, X } from "lucide-react";
+import { Bell, Building2, CheckCircle2, ChevronDown, ChevronUp, ExternalLink, GitBranch, Megaphone, Plus, RefreshCw, Send, Sparkles, UserRound, Users2, X } from "lucide-react";
 
 import type { PersonalReminder, TaskRecord, TemporaryTaskMode } from "../../../types";
-import { recordApi, reminderApi } from "../../../services/task";
+import { hallDailyApi, recordApi, reminderApi } from "../../../services/task";
+import type { HallTaskRecord } from "../../../services/task";
 import { workflowTaskApi } from "../../../services/workflowTask";
 import type { WorkflowMyTask } from "../../../services/workflowTask";
 import { broadcastTaskApi } from "../../../services/broadcastTask";
@@ -12,6 +13,7 @@ import { useIdentityStore } from "../../../stores/identityStore";
 import { TaskRecordCard } from "../my-todos/TaskRecordCard";
 import { ReminderTodoCard, isReminderOverdue, isReminderUrgent, sortReminders } from "../reminder/components/ReminderTodoCard";
 import { TaskDashboardSection } from "./components/TaskDashboardSection";
+import { HallDailyRecordCard } from "./components/HallDailyRecordCard";
 import { WorkflowTaskCard } from "./components/WorkflowTaskCard";
 import { BroadcastTaskCard } from "./components/BroadcastTaskCard";
 import { MiniDatePicker, MiniTimePicker } from "../../../shared/components/date-time/MiniDateTimePickers";
@@ -242,9 +244,11 @@ export function TaskDashboardPage() {
   const [reminders, setReminders] = useState<PersonalReminder[]>([]);
   const [workflowTasks, setWorkflowTasks] = useState<WorkflowMyTask[]>([]);
   const [broadcastTasks, setBroadcastTasks] = useState<BroadcastTaskForAnchor[]>([]);
+  const [hallDailyRecords, setHallDailyRecords] = useState<HallTaskRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [activeRecordId, setActiveRecordId] = useState<string | null>(null);
   const [dailyRecordView, setDailyRecordView] = useState<"today" | "overdue">("today");
+  const [hallDailyRecordView, setHallDailyRecordView] = useState<"today" | "overdue">("today");
   const [showReminderModal, setShowReminderModal] = useState(false);
   const [reminderForm, setReminderForm] = useState<ReminderFormState>(defaultReminderForm());
   const [savingReminder, setSavingReminder] = useState(false);
@@ -252,7 +256,9 @@ export function TaskDashboardPage() {
 
   async function load() {
     setLoading(true);
-    const [recordRows, reminderRows, workflowRows, broadcastRows] = await Promise.all([
+    // 厅管日常任务：HALL_MANAGER 身份必然请求；ANCHOR 身份也请求（账号可能同时有厅管身份，后端融通返回数据）
+    const shouldFetchHallDaily = currentIdentity?.roleCode === "HALL_MANAGER" || currentIdentity?.roleCode === "ANCHOR";
+    const [recordRows, reminderRows, workflowRows, broadcastRows, hallDailyRows] = await Promise.all([
       recordApi.getMyRecords().catch(() => [] as TaskRecord[]),
       reminderApi.list("active").catch(() => [] as PersonalReminder[]),
       workflowTaskApi.myTasks().then((rows) =>
@@ -263,11 +269,15 @@ export function TaskDashboardPage() {
         // 前端二次保险：过滤掉已结束（到截止时间）的任务
         rows.filter((t) => t.status !== "ended")
       ).catch(() => [] as BroadcastTaskForAnchor[]),
+      shouldFetchHallDaily
+        ? hallDailyApi.getMyRecords().catch(() => [] as HallTaskRecord[])
+        : Promise.resolve([] as HallTaskRecord[]),
     ]);
     setRecords(recordRows);
     setReminders(reminderRows);
     setWorkflowTasks(workflowRows);
     setBroadcastTasks(broadcastRows);
+    setHallDailyRecords(hallDailyRows);
     setLoading(false);
   }
 
@@ -279,6 +289,12 @@ export function TaskDashboardPage() {
   const dailyTodayRecords = useMemo(() => dailyRecords.filter((record) => record.status !== "overdue"), [dailyRecords]);
   const dailyOverdueRecords = useMemo(() => dailyRecords.filter((record) => record.status === "overdue"), [dailyRecords]);
   const visibleDailyRecords = dailyRecordView === "overdue" ? dailyOverdueRecords : dailyTodayRecords;
+
+  const hallDailyTodayRecords = useMemo(() => hallDailyRecords.filter((r) => r.status !== "overdue"), [hallDailyRecords]);
+  const hallDailyOverdueRecords = useMemo(() => hallDailyRecords.filter((r) => r.status === "overdue"), [hallDailyRecords]);
+  const visibleHallDailyRecords = hallDailyRecordView === "overdue" ? hallDailyOverdueRecords : hallDailyTodayRecords;
+  // 有厅管日常任务数据时就显示该模块（支持 ANCHOR+HALL_MANAGER 双重身份融通）
+  const isHallManagerIdentity = currentIdentity?.roleCode === "HALL_MANAGER" || hallDailyRecords.length > 0;
   const temporaryByMode = useMemo(() => {
 
     const pick = (mode: TemporaryTaskMode) => sortTaskRecords(records.filter((record) => record.assignment?.category === "TEMPORARY" && record.assignment?.temporaryMode === mode));
@@ -440,6 +456,60 @@ export function TaskDashboardPage() {
       ) : (
         <>
         <div className="grid items-start gap-3 xl:grid-cols-3">
+
+          {/* 厅管日常任务 — 固定占位第一格 */}
+          <TaskDashboardSection
+              icon={<Building2 size={18} />}
+              title="厅管日常任务"
+              description={hallDailyRecordView === "today" ? "展示今日厅管日常任务，未完成部分会在 23:59 后转入昨日补录。" : "仅展示昨日未完成任务，可在今天 16:00 前补录。"}
+              count={visibleHallDailyRecords.length}
+              pendingCount={visibleHallDailyRecords.filter((r) => r.status !== "submitted").length}
+              urgentCount={0}
+              overdueCount={hallDailyOverdueRecords.length}
+              tone="bg-teal-50 text-teal-600"
+              emptyText={hallDailyRecordView === "today" ? "今日暂无厅管日常任务" : "当前没有昨日逾期补录任务"}
+              variant="column"
+              hideDescription
+              hideStats
+              action={
+                <div className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={() => setHallDailyRecordView("today")}
+                    className={`inline-flex items-center gap-1 rounded-lg border px-2.5 py-1 text-sm font-bold transition ${
+                      hallDailyRecordView === "today" ? "border-teal-200 bg-teal-50 text-teal-600" : "border-slate-200 bg-white text-slate-500 hover:bg-slate-50"
+                    }`}
+                  >
+                    当日任务
+                    <span className={`rounded-full px-1.5 py-0.5 text-sm font-bold ${hallDailyRecordView === "today" ? "bg-white/90 text-teal-600" : "bg-slate-100 text-slate-500"}`}>{hallDailyTodayRecords.length}</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setHallDailyRecordView("overdue")}
+                    className={`inline-flex items-center gap-1 rounded-lg border px-2.5 py-1 text-sm font-bold transition ${
+                      hallDailyRecordView === "overdue" ? "border-red-200 bg-red-50 text-red-600" : "border-slate-200 bg-white text-slate-500 hover:bg-slate-50"
+                    }`}
+                  >
+                    昨日逾期补录
+                    <span className={`rounded-full px-1.5 py-0.5 text-sm font-bold ${hallDailyRecordView === "overdue" ? "bg-white/90 text-red-600" : hallDailyOverdueRecords.length > 0 ? "bg-red-50 text-red-500" : "bg-slate-100 text-slate-500"}`}>{hallDailyOverdueRecords.length}</span>
+                  </button>
+                </div>
+              }
+            >
+              {hallDailyRecordView === "overdue" && visibleHallDailyRecords.length > 0 && (
+                <div className="rounded-2xl border border-red-100 bg-red-50 px-3 py-2 text-[11px] leading-5 text-red-600">
+                  这里展示昨天未完成的厅管日常任务，最迟今天 16:00 停止收集；到点后将不可再补录。
+                </div>
+              )}
+              {visibleHallDailyRecords.map((record) => (
+                <HallDailyRecordCard
+                  key={record.id}
+                  record={record}
+                  onRefresh={load}
+                />
+              ))}
+            </TaskDashboardSection>
+
           <TaskDashboardSection
             icon={<CheckCircle2 size={18} />}
             title="主播日常任务"
@@ -610,30 +680,34 @@ export function TaskDashboardPage() {
               ))}
             </div>
           </TaskDashboardSection>
-        </div>
 
-        {/* 流转任务 — 满宽独立行 */}
-        {(() => {
-          const myPendingWorkflow = workflowTasks.filter((t) =>
-            t.steps.some((s) => s.assigneeUserId === currentIdentity?.userId && s.status === "active")
-          ).length;
-          const myDoneWorkflow = workflowTasks.filter((t) =>
-            t.steps.filter((s) => s.assigneeUserId === currentIdentity?.userId).length > 0 &&
-            t.steps.filter((s) => s.assigneeUserId === currentIdentity?.userId).every((s) => s.status === "completed")
-          ).length;
-          const completedWorkflow = workflowTasks.filter((t) => t.status === "completed").length;
-          const inProgressWorkflow = workflowTasks.filter((t) => t.status === "in_progress").length;
-          return (
-            <section className="overflow-hidden rounded-2xl border border-indigo-100/80 bg-white shadow-[0_4px_20px_rgba(99,102,241,0.08)]">
-              {/* 渐变标题栏 */}
-              <div className="flex items-center gap-3 bg-gradient-to-r from-indigo-50 via-white to-violet-50 px-4 py-3">
-                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-indigo-500 text-white shadow-[0_2px_8px_rgba(99,102,241,0.35)]">
-                  <GitBranch size={17} />
-                </div>
-                <div className="min-w-0 flex-1">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <h2 className="text-base font-bold text-slate-800">流转任务</h2>
-                    <span className="rounded-full bg-indigo-100 px-2 py-0.5 text-xs font-bold text-indigo-600">{workflowTasks.length} 项</span>
+          {/* 流转任务 — 第二行第二格 */}
+          {(() => {
+            const myPendingWorkflow = workflowTasks.filter((t) =>
+              t.steps.some((s) => s.assigneeUserId === currentIdentity?.userId && s.status === "active")
+            ).length;
+            const myDoneWorkflow = workflowTasks.filter((t) =>
+              t.steps.filter((s) => s.assigneeUserId === currentIdentity?.userId).length > 0 &&
+              t.steps.filter((s) => s.assigneeUserId === currentIdentity?.userId).every((s) => s.status === "completed")
+            ).length;
+            const completedWorkflow = workflowTasks.filter((t) => t.status === "completed").length;
+            const inProgressWorkflow = workflowTasks.filter((t) => t.status === "in_progress").length;
+            return (
+              <TaskDashboardSection
+                icon={<GitBranch size={18} />}
+                title="流转任务"
+                description="展示进行中与已完成任务；到达截止时间后自动从此处移除"
+                count={workflowTasks.length}
+                pendingCount={myPendingWorkflow}
+                urgentCount={0}
+                overdueCount={0}
+                tone="bg-indigo-50 text-indigo-600"
+                emptyText="暂无流转任务，管理员发布后将在此显示"
+                variant="column"
+                hideDescription
+                hideStats
+                action={
+                  <div className="flex flex-wrap items-center gap-1">
                     {myPendingWorkflow > 0 && (
                       <span className="inline-flex items-center gap-1 rounded-full bg-amber-400 px-2 py-0.5 text-xs font-bold text-white">
                         ● 待我填写 {myPendingWorkflow}
@@ -655,48 +729,41 @@ export function TaskDashboardPage() {
                       </span>
                     )}
                   </div>
-                  <p className="mt-0.5 text-[11px] text-slate-400">展示进行中与已完成任务；到达截止时间后自动从此处移除</p>
-                </div>
-              </div>
+                }
+              >
+                {workflowTasks.map((task) => (
+                  <WorkflowTaskCard
+                    key={task.id}
+                    task={task}
+                    currentUserId={currentIdentity?.userId ?? ""}
+                    onRefresh={() => void load()}
+                  />
+                ))}
+              </TaskDashboardSection>
+            );
+          })()}
 
-              {/* 内容区 */}
-              {workflowTasks.length === 0 ? (
-                <div className="flex items-center justify-center gap-3 px-6 py-8 text-slate-400">
-                  <GitBranch size={18} className="shrink-0 text-indigo-200" />
-                  <span className="text-sm">暂无流转任务，管理员发布后将在此显示</span>
-                </div>
-              ) : (
-                <div className="grid gap-3 p-3 xl:grid-cols-3">
-                  {workflowTasks.map((task) => (
-                    <WorkflowTaskCard
-                      key={task.id}
-                      task={task}
-                      currentUserId={currentIdentity?.userId ?? ""}
-                      onRefresh={() => void load()}
-                    />
-                  ))}
-                </div>
-              )}
-            </section>
-          );
-        })()}
-
-        {/* 厅内直达任务 — 满宽独立行 */}
-        {(() => {
-          const pendingBroadcast = broadcastTasks.filter((t) => t.myRecord.status !== "submitted" && t.myRecord.status !== "overdue").length;
-          const submittedBroadcast = broadcastTasks.filter((t) => t.myRecord.status === "submitted").length;
-          const overdueBroadcast = broadcastTasks.filter((t) => t.myRecord.status === "overdue").length;
-          return (
-            <section className="overflow-hidden rounded-2xl border border-orange-100/80 bg-white shadow-[0_4px_20px_rgba(251,146,60,0.08)]">
-              {/* 渐变标题栏 */}
-              <div className="flex items-center gap-3 bg-gradient-to-r from-orange-50 via-white to-amber-50 px-4 py-3">
-                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-orange-500 text-white shadow-[0_2px_8px_rgba(251,146,60,0.35)]">
-                  <Megaphone size={17} />
-                </div>
-                <div className="min-w-0 flex-1">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <h2 className="text-base font-bold text-slate-800">厅内直达任务</h2>
-                    <span className="rounded-full bg-orange-100 px-2 py-0.5 text-xs font-bold text-orange-600">{broadcastTasks.length} 项</span>
+          {/* 厅内直达任务 — 第二行第三格 */}
+          {(() => {
+            const pendingBroadcast = broadcastTasks.filter((t) => t.myRecord.status !== "submitted" && t.myRecord.status !== "overdue").length;
+            const submittedBroadcast = broadcastTasks.filter((t) => t.myRecord.status === "submitted").length;
+            const overdueBroadcast = broadcastTasks.filter((t) => t.myRecord.status === "overdue").length;
+            return (
+              <TaskDashboardSection
+                icon={<Megaphone size={18} />}
+                title="厅内直达任务"
+                description="由厅管理员群发的直达任务，逐题填写后提交"
+                count={broadcastTasks.length}
+                pendingCount={pendingBroadcast}
+                urgentCount={0}
+                overdueCount={overdueBroadcast}
+                tone="bg-orange-50 text-orange-600"
+                emptyText="暂无厅内直达任务，厅管理员发布后将在此显示"
+                variant="column"
+                hideDescription
+                hideStats
+                action={
+                  <div className="flex flex-wrap items-center gap-1">
                     {pendingBroadcast > 0 && (
                       <span className="inline-flex items-center gap-1 rounded-full bg-amber-400 px-2 py-0.5 text-xs font-bold text-white">
                         ● 待完成 {pendingBroadcast}
@@ -713,30 +780,20 @@ export function TaskDashboardPage() {
                       </span>
                     )}
                   </div>
-                  <p className="mt-0.5 text-[11px] text-slate-400">由厅管理员群发的直达任务，逐题填写后提交</p>
-                </div>
-              </div>
+                }
+              >
+                {broadcastTasks.map((task) => (
+                  <BroadcastTaskCard
+                    key={task.id}
+                    task={task}
+                    onRefresh={() => void load()}
+                  />
+                ))}
+              </TaskDashboardSection>
+            );
+          })()}
 
-              {/* 内容区 */}
-              {broadcastTasks.length === 0 ? (
-                <div className="flex items-center justify-center gap-3 px-6 py-8 text-slate-400">
-                  <Megaphone size={18} className="shrink-0 text-orange-200" />
-                  <span className="text-sm">暂无厅内直达任务，厅管理员发布后将在此显示</span>
-                </div>
-              ) : (
-                <div className="grid gap-3 p-3 xl:grid-cols-3">
-                  {broadcastTasks.map((task) => (
-                    <BroadcastTaskCard
-                      key={task.id}
-                      task={task}
-                      onRefresh={() => void load()}
-                    />
-                  ))}
-                </div>
-              )}
-            </section>
-          );
-        })()}
+        </div>
         </>
       )}
 
