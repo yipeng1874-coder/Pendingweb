@@ -50,7 +50,7 @@ const requiredTaskPermissions: PermissionSpec[] = [
   { code: "task:record:submit", name: "提交待办任务", module: "task", roleCodes: ["HQ_ADMIN", "BASE_ADMIN", "TEAM_ADMIN", "HALL_MANAGER", "ANCHOR"] },
   { code: "task:record:view", name: "查看任务执行记录", module: "task", roleCodes: ["HQ_ADMIN", "BASE_ADMIN", "TEAM_ADMIN", "HALL_MANAGER"] },
   { code: "task:exemption:apply", name: "申请任务豁免", module: "task", roleCodes: ["HQ_ADMIN", "BASE_ADMIN", "TEAM_ADMIN", "HALL_MANAGER", "ANCHOR"] },
-  { code: "task:exemption:review", name: "审批豁免", module: "task", roleCodes: ["HQ_ADMIN", "BASE_ADMIN"] },
+  { code: "task:exemption:review", name: "审批豁免", module: "task", roleCodes: ["HQ_ADMIN", "BASE_ADMIN", "TEAM_ADMIN", "HALL_MANAGER"] },
   { code: "task:report:view", name: "查看任务报表", module: "task", roleCodes: ["HQ_ADMIN", "BASE_ADMIN", "TEAM_ADMIN", "HALL_MANAGER"] },
   { code: "task:reminder:manage", name: "管理个人提醒", module: "task", roleCodes: ["HQ_ADMIN", "BASE_ADMIN", "TEAM_ADMIN", "HALL_MANAGER", "ANCHOR"] },
 ];

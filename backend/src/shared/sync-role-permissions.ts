@@ -57,12 +57,12 @@ const rolePermissions: Record<string, string[]> = {
     "account:view", "account:create", "identity:grant",
     "anchor:view", "anchor:profile:create", "anchor:profile:bind", "anchor:registration:review",
     "task:template:manage", "task:assignment:manage", "task:assignment:view",
-    "task:record:submit", "task:record:view", "task:exemption:apply", "task:report:view", "task:reminder:manage",
+    "task:record:submit", "task:record:view", "task:exemption:apply", "task:exemption:review", "task:report:view", "task:reminder:manage",
   ],
   HALL_MANAGER: [
     "org:view",
     "anchor:view",
-    "task:assignment:view", "task:record:submit", "task:record:view", "task:exemption:apply", "task:report:view", "task:reminder:manage",
+    "task:assignment:view", "task:record:submit", "task:record:view", "task:exemption:apply", "task:exemption:review", "task:report:view", "task:reminder:manage",
   ],
   ANCHOR: [
     "task:record:submit", "task:exemption:apply", "task:reminder:manage",
