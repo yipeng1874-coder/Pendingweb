@@ -1,4 +1,4 @@
-import { prisma } from "../../../lib/prisma.js";
+import { prisma } from "../../../shared/prisma.js";
 import type { BroadcastAnchorStatus, BroadcastQuestionType as PrismaQuestionType } from "@prisma/client";
 
 // ─── 题目类型 ──────────────────────────────────────────────────────────────────

@@ -1,4 +1,4 @@
-import { prisma } from "../../../lib/prisma.js";
+import { prisma } from "../../../shared/prisma.js";
 import type { WorkflowQuestionType as PrismaQuestionType } from "@prisma/client";
 
 export type WorkflowTaskStatus = "in_progress" | "completed" | "ended";
