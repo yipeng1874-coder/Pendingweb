@@ -1,6 +1,5 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import path from "node:path";
-import { randomUUID } from "node:crypto";
+import { prisma } from "../../../lib/prisma.js";
+import type { BroadcastAnchorStatus, BroadcastQuestionType as PrismaQuestionType } from "@prisma/client";
 
 // ─── 题目类型 ──────────────────────────────────────────────────────────────────
 export type BroadcastQuestionType = "QA" | "FILL_BLANK" | "SINGLE_CHOICE" | "MULTI_CHOICE" | "LINK" | "ATTACHMENT";
@@ -51,58 +50,199 @@ export type BroadcastTask = {
   updatedAt: string;
 };
 
-// ─── 存储 ──────────────────────────────────────────────────────────────────────
-type BroadcastDb = { tasks: BroadcastTask[] };
-
-const DATA_DIR = path.join(process.cwd(), "data");
-const DATA_FILE = path.join(DATA_DIR, "broadcast-tasks.json");
-
-async function ensureDb(): Promise<BroadcastDb> {
-  await mkdir(DATA_DIR, { recursive: true });
-  try {
-    const content = await readFile(DATA_FILE, "utf8");
-    const parsed = JSON.parse(content) as Partial<BroadcastDb>;
-    return { tasks: Array.isArray(parsed.tasks) ? parsed.tasks : [] };
-  } catch {
-    const initial: BroadcastDb = { tasks: [] };
-    await writeFile(DATA_FILE, JSON.stringify(initial, null, 2), "utf8");
-    return initial;
-  }
-}
-
-async function saveDb(db: BroadcastDb) {
-  await mkdir(DATA_DIR, { recursive: true });
-  await writeFile(DATA_FILE, JSON.stringify(db, null, 2), "utf8");
-}
-
 // ─── 带 answers 的完整任务类型（厅管看板用） ────────────────────────────────────
+export type BroadcastAnswer = {
+  questionId: string;
+  answerText?: string;
+  answerOptions?: string[];
+  isLinkConfirmed?: boolean;
+  attachmentUrls?: string[];
+};
+
+/** 主播记录（含答案） */
+export type BroadcastAnchorRecordWithAnswers = BroadcastAnchorRecord & {
+  answers: BroadcastAnswer[];
+};
+
 export type BroadcastTaskWithAnswers = Omit<BroadcastTask, "anchorRecords"> & {
   anchorRecords: BroadcastAnchorRecordWithAnswers[];
 };
 
+/** 带答案的任务视图（对应"我的任务"） */
+export type BroadcastTaskForAnchor = Omit<BroadcastTask, "anchorRecords"> & {
+  myRecord: BroadcastAnchorRecordWithAnswers;
+};
+
+// ─── 内部辅助：Prisma 行 → 业务类型 ────────────────────────────────────────────
+
+function mapQuestion(q: {
+  id: string;
+  title: string;
+  itemType: PrismaQuestionType;
+  isRequired: boolean;
+  options: unknown;
+  linkUrl: string | null;
+}): BroadcastQuestion {
+  return {
+    id: q.id,
+    title: q.title,
+    itemType: q.itemType as BroadcastQuestionType,
+    isRequired: q.isRequired,
+    options: Array.isArray(q.options) ? (q.options as string[]) : [],
+    linkUrl: q.linkUrl,
+  };
+}
+
+function mapAnchorRecord(r: {
+  id: string;
+  anchorUserId: string;
+  anchorNickname: string;
+  anchorPhone: string;
+  anchorDouyinNo: string | null;
+  anchorOrgId: string | null;
+  anchorOrgName: string | null;
+  status: BroadcastAnchorStatus;
+  submittedAt: Date | null;
+}): BroadcastAnchorRecord {
+  return {
+    id: r.id,
+    anchorUserId: r.anchorUserId,
+    anchorNickname: r.anchorNickname,
+    anchorPhone: r.anchorPhone,
+    anchorDouyinNo: r.anchorDouyinNo,
+    anchorOrgId: r.anchorOrgId,
+    anchorOrgName: r.anchorOrgName,
+    status: r.status as BroadcastAnchorRecord["status"],
+    submittedAt: r.submittedAt ? r.submittedAt.toISOString() : null,
+  };
+}
+
+function mapAnswers(
+  rawAnswers: Array<{
+    questionId: string;
+    answerText: string | null;
+    answerOptions: unknown;
+    isLinkConfirmed: boolean | null;
+    attachmentUrls: unknown;
+  }>,
+): BroadcastAnswer[] {
+  return rawAnswers.map((a) => ({
+    questionId: a.questionId,
+    answerText: a.answerText ?? undefined,
+    answerOptions: Array.isArray(a.answerOptions) ? (a.answerOptions as string[]) : undefined,
+    isLinkConfirmed: a.isLinkConfirmed ?? undefined,
+    attachmentUrls: Array.isArray(a.attachmentUrls) ? (a.attachmentUrls as string[]) : undefined,
+  }));
+}
+
+type DbTask = Awaited<ReturnType<typeof findTaskWithAll>>;
+
+async function findTaskWithAll(taskId: string) {
+  return prisma.broadcastTask.findUnique({
+    where: { id: taskId },
+    include: {
+      questions: { orderBy: { id: "asc" } },
+      anchorRecords: {
+        include: { answers: true },
+        orderBy: { id: "asc" },
+      },
+    },
+  });
+}
+
+function dbTaskToBroadcastTask(t: NonNullable<DbTask>): BroadcastTask {
+  return {
+    id: t.id,
+    title: t.title,
+    description: t.description,
+    dueAt: t.dueAt ? t.dueAt.toISOString() : null,
+    createdByUserId: t.createdByUserId,
+    createdByIdentityId: t.createdByIdentityId,
+    createdByName: t.createdByName,
+    hallOrgId: t.hallOrgId,
+    hallOrgName: t.hallOrgName,
+    questions: t.questions.map(mapQuestion),
+    anchorRecords: t.anchorRecords.map(mapAnchorRecord),
+    status: t.status as BroadcastTask["status"],
+    createdAt: t.createdAt.toISOString(),
+    updatedAt: t.updatedAt.toISOString(),
+  };
+}
+
+// ─── 过期处理（数据库版，批量更新） ────────────────────────────────────────────
+async function applyExpire() {
+  const now = new Date();
+  // 找出所有到期的 active 任务
+  const expiredTasks = await prisma.broadcastTask.findMany({
+    where: { status: "active", dueAt: { lt: now } },
+    select: { id: true },
+  });
+  if (expiredTasks.length === 0) return;
+
+  const ids = expiredTasks.map((t) => t.id);
+
+  await prisma.$transaction([
+    prisma.broadcastTask.updateMany({
+      where: { id: { in: ids } },
+      data: { status: "ended" },
+    }),
+    prisma.broadcastAnchorRecord.updateMany({
+      where: {
+        taskId: { in: ids },
+        status: { in: ["pending", "in_progress"] },
+      },
+      data: { status: "overdue" },
+    }),
+  ]);
+}
+
 // ─── 查询 ──────────────────────────────────────────────────────────────────────
 export async function listBroadcastTasksByIssuer(userId: string): Promise<BroadcastTask[]> {
-  const db = await ensureDb();
-  autoExpire(db);
-  return db.tasks
-    .filter((t) => t.createdByUserId === userId)
-    .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  await applyExpire();
+  const tasks = await prisma.broadcastTask.findMany({
+    where: { createdByUserId: userId },
+    include: {
+      questions: { orderBy: { id: "asc" } },
+      anchorRecords: { orderBy: { id: "asc" } },
+    },
+    orderBy: { createdAt: "desc" },
+  });
+  return tasks.map((t) => ({
+    ...dbTaskToBroadcastTask({ ...t, anchorRecords: t.anchorRecords.map((r) => ({ ...r, answers: [] })) } as unknown as NonNullable<DbTask>),
+    anchorRecords: t.anchorRecords.map(mapAnchorRecord),
+  }));
 }
 
 /** 厅管看板专用：返回含每位主播 answers 的完整数据（已废弃，保留兼容） */
 export async function listBroadcastTasksByIssuerWithAnswers(userId: string): Promise<BroadcastTaskWithAnswers[]> {
-  const db = await ensureDb();
-  autoExpire(db);
-  return db.tasks
-    .filter((t) => t.createdByUserId === userId)
-    .map((t) => ({
-      ...t,
-      anchorRecords: t.anchorRecords.map((r) => ({
-        ...r,
-        answers: ((r as BroadcastAnchorRecordWithAnswers).answers ?? []),
-      })),
-    }))
-    .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  await applyExpire();
+  const tasks = await prisma.broadcastTask.findMany({
+    where: { createdByUserId: userId },
+    include: {
+      questions: { orderBy: { id: "asc" } },
+      anchorRecords: { include: { answers: true }, orderBy: { id: "asc" } },
+    },
+    orderBy: { createdAt: "desc" },
+  });
+  return tasks.map((t) => ({
+    id: t.id,
+    title: t.title,
+    description: t.description,
+    dueAt: t.dueAt ? t.dueAt.toISOString() : null,
+    createdByUserId: t.createdByUserId,
+    createdByIdentityId: t.createdByIdentityId,
+    createdByName: t.createdByName,
+    hallOrgId: t.hallOrgId,
+    hallOrgName: t.hallOrgName,
+    questions: t.questions.map(mapQuestion),
+    anchorRecords: t.anchorRecords.map((r) => ({
+      ...mapAnchorRecord(r),
+      answers: mapAnswers(r.answers),
+    })),
+    status: t.status as BroadcastTask["status"],
+    createdAt: t.createdAt.toISOString(),
+    updatedAt: t.updatedAt.toISOString(),
+  }));
 }
 
 // ─── 分页查询（不含 answers，节省带宽） ──────────────────────────────────────
@@ -124,32 +264,45 @@ export async function listBroadcastTasksByIssuerPaged(
   userId: string,
   opts: ListBroadcastTasksPageOptions,
 ): Promise<BroadcastTaskPageResult> {
-  const db = await ensureDb();
-  autoExpire(db);
+  await applyExpire();
 
-  const sorted = db.tasks
-    .filter((t) => t.createdByUserId === userId)
-    .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  const [total, tasks] = await prisma.$transaction([
+    prisma.broadcastTask.count({ where: { createdByUserId: userId } }),
+    prisma.broadcastTask.findMany({
+      where: { createdByUserId: userId },
+      include: {
+        questions: { orderBy: { id: "asc" } },
+        anchorRecords: { orderBy: { id: "asc" } },
+      },
+      orderBy: { createdAt: "desc" },
+      skip: (opts.page - 1) * opts.pageSize,
+      take: opts.pageSize,
+    }),
+  ]);
 
-  const total = sorted.length;
-  const start = (opts.page - 1) * opts.pageSize;
-  const slice = sorted.slice(start, start + opts.pageSize);
-
-  // ⚡ 剥离 answers，只保留主播状态摘要
-  const tasks: BroadcastTaskWithAnswers[] = slice.map((t) => ({
-    ...t,
-    anchorRecords: t.anchorRecords.map((r) => ({
-      ...r,
-      answers: [],
-    })),
+  const result: BroadcastTaskWithAnswers[] = tasks.map((t) => ({
+    id: t.id,
+    title: t.title,
+    description: t.description,
+    dueAt: t.dueAt ? t.dueAt.toISOString() : null,
+    createdByUserId: t.createdByUserId,
+    createdByIdentityId: t.createdByIdentityId,
+    createdByName: t.createdByName,
+    hallOrgId: t.hallOrgId,
+    hallOrgName: t.hallOrgName,
+    questions: t.questions.map(mapQuestion),
+    anchorRecords: t.anchorRecords.map((r) => ({ ...mapAnchorRecord(r), answers: [] })),
+    status: t.status as BroadcastTask["status"],
+    createdAt: t.createdAt.toISOString(),
+    updatedAt: t.updatedAt.toISOString(),
   }));
 
   return {
-    tasks,
+    tasks: result,
     total,
     page: opts.page,
     pageSize: opts.pageSize,
-    hasMore: start + opts.pageSize < total,
+    hasMore: (opts.page - 1) * opts.pageSize + tasks.length < total,
   };
 }
 
@@ -158,18 +311,23 @@ export async function getBroadcastTaskAnchorAnswers(
   taskId: string,
   userId: string,
 ): Promise<BroadcastAnchorRecordWithAnswers[] | null> {
-  const db = await ensureDb();
-  const task = db.tasks.find((t) => t.id === taskId && t.createdByUserId === userId);
+  const task = await prisma.broadcastTask.findUnique({
+    where: { id: taskId, createdByUserId: userId },
+    include: {
+      anchorRecords: { include: { answers: true }, orderBy: { id: "asc" } },
+    },
+  });
   if (!task) return null;
   return task.anchorRecords.map((r) => ({
-    ...r,
-    answers: ((r as BroadcastAnchorRecordWithAnswers).answers ?? []),
+    ...mapAnchorRecord(r),
+    answers: mapAnswers(r.answers),
   }));
 }
 
 export async function getBroadcastTaskById(taskId: string): Promise<BroadcastTask | null> {
-  const db = await ensureDb();
-  return db.tasks.find((t) => t.id === taskId) ?? null;
+  const t = await findTaskWithAll(taskId);
+  if (!t) return null;
+  return dbTaskToBroadcastTask(t);
 }
 
 // ─── 创建 ──────────────────────────────────────────────────────────────────────
@@ -194,74 +352,44 @@ export type BroadcastCreateInput = {
 };
 
 export async function createBroadcastTask(input: BroadcastCreateInput): Promise<BroadcastTask> {
-  const db = await ensureDb();
-  const now = new Date().toISOString();
-  const task: BroadcastTask = {
-    id: randomUUID(),
-    title: input.title,
-    description: input.description ?? null,
-    dueAt: input.dueAt ?? null,
-    createdByUserId: input.createdByUserId,
-    createdByIdentityId: input.createdByIdentityId,
-    createdByName: input.createdByName,
-    hallOrgId: input.hallOrgId,
-    hallOrgName: input.hallOrgName,
-    questions: input.questions.map((q) => ({ ...q, id: randomUUID() })),
-    anchorRecords: input.anchors.map((anchor) => ({
-      id: randomUUID(),
-      anchorUserId: anchor.userId,
-      anchorNickname: anchor.nickname,
-      anchorPhone: anchor.phone,
-      anchorDouyinNo: anchor.douyinNo ?? null,
-      anchorOrgId: anchor.orgId ?? null,
-      anchorOrgName: anchor.orgName ?? null,
-      status: "pending" as const,
-      submittedAt: null,
-    })),
-    status: "active",
-    createdAt: now,
-    updatedAt: now,
-  };
-  db.tasks.unshift(task);
-  await saveDb(db);
-  return task;
-}
-
-// ─── 答案存储类型 ────────────────────────────────────────────────────────────
-export type BroadcastAnswer = {
-  questionId: string;
-  answerText?: string;
-  answerOptions?: string[];
-  isLinkConfirmed?: boolean;
-  attachmentUrls?: string[];
-};
-
-/** 主播记录（含答案） */
-export type BroadcastAnchorRecordWithAnswers = BroadcastAnchorRecord & {
-  answers: BroadcastAnswer[];
-};
-
-/** 带答案的任务视图（对应"我的任务"） */
-export type BroadcastTaskForAnchor = Omit<BroadcastTask, "anchorRecords"> & {
-  myRecord: BroadcastAnchorRecordWithAnswers;
-};
-
-// ─── 查询"我的"群发任务 ────────────────────────────────────────────────────────
-export async function getBroadcastTasksForAnchor(userId: string): Promise<BroadcastTaskForAnchor[]> {
-  const db = await ensureDb();
-  autoExpire(db);
-  const result: BroadcastTaskForAnchor[] = [];
-  for (const task of db.tasks) {
-    // 任务已结束（到截止时间）则不推送给主播
-    if (task.status === "ended") continue;
-    const rec = task.anchorRecords.find((r) => r.anchorUserId === userId);
-    if (!rec) continue;
-    const recWithAnswers = rec as BroadcastAnchorRecordWithAnswers;
-    if (!recWithAnswers.answers) recWithAnswers.answers = [];
-    const { anchorRecords: _drop, ...taskBase } = task;
-    result.push({ ...taskBase, myRecord: recWithAnswers });
-  }
-  return result.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  const task = await prisma.broadcastTask.create({
+    data: {
+      title: input.title,
+      description: input.description ?? null,
+      dueAt: input.dueAt ? new Date(input.dueAt) : null,
+      createdByUserId: input.createdByUserId,
+      createdByIdentityId: input.createdByIdentityId,
+      createdByName: input.createdByName,
+      hallOrgId: input.hallOrgId,
+      hallOrgName: input.hallOrgName,
+      status: "active",
+      questions: {
+        create: input.questions.map((q) => ({
+          title: q.title,
+          itemType: q.itemType as PrismaQuestionType,
+          isRequired: q.isRequired,
+          options: (q.options ?? []) as string[],
+          linkUrl: q.linkUrl ?? null,
+        })),
+      },
+      anchorRecords: {
+        create: input.anchors.map((anchor) => ({
+          anchorUserId: anchor.userId,
+          anchorNickname: anchor.nickname,
+          anchorPhone: anchor.phone,
+          anchorDouyinNo: anchor.douyinNo ?? null,
+          anchorOrgId: anchor.orgId ?? null,
+          anchorOrgName: anchor.orgName ?? null,
+          status: "pending" as BroadcastAnchorStatus,
+        })),
+      },
+    },
+    include: {
+      questions: { orderBy: { id: "asc" } },
+      anchorRecords: { include: { answers: true }, orderBy: { id: "asc" } },
+    },
+  });
+  return dbTaskToBroadcastTask(task);
 }
 
 // ─── 保存单道题目答案 ──────────────────────────────────────────────────────────
@@ -270,72 +398,149 @@ export async function saveBroadcastAnswer(
   userId: string,
   answer: BroadcastAnswer,
 ): Promise<{ success: boolean; task?: BroadcastTaskForAnchor; recordCompleted?: boolean; error?: string }> {
-  const db = await ensureDb();
-
-  const task = db.tasks.find((t) => t.id === taskId);
+  // 查任务 + 主播记录
+  const task = await prisma.broadcastTask.findUnique({
+    where: { id: taskId },
+    include: { questions: true },
+  });
   if (!task) return { success: false, error: "TASK_NOT_FOUND" };
 
-  const rec = task.anchorRecords.find((r) => r.anchorUserId === userId) as BroadcastAnchorRecordWithAnswers | undefined;
+  const rec = await prisma.broadcastAnchorRecord.findUnique({
+    where: { taskId_anchorUserId: { taskId, anchorUserId: userId } },
+    include: { answers: true },
+  });
   if (!rec) return { success: false, error: "FORBIDDEN" };
   if (rec.status === "submitted") return { success: false, error: "ALREADY_SUBMITTED" };
   if (rec.status === "overdue") return { success: false, error: "OVERDUE" };
 
-  if (!rec.answers) rec.answers = [];
-
-  const idx = rec.answers.findIndex((a) => a.questionId === answer.questionId);
-  if (idx >= 0) {
-    rec.answers[idx] = answer;
-  } else {
-    rec.answers.push(answer);
-  }
+  // upsert 答案
+  await prisma.broadcastAnchorAnswer.upsert({
+    where: { recordId_questionId: { recordId: rec.id, questionId: answer.questionId } },
+    create: {
+      recordId: rec.id,
+      questionId: answer.questionId,
+      answerText: answer.answerText ?? null,
+      answerOptions: (answer.answerOptions ?? null) as string[] | null,
+      isLinkConfirmed: answer.isLinkConfirmed ?? null,
+      attachmentUrls: (answer.attachmentUrls ?? null) as string[] | null,
+    },
+    update: {
+      answerText: answer.answerText ?? null,
+      answerOptions: (answer.answerOptions ?? null) as string[] | null,
+      isLinkConfirmed: answer.isLinkConfirmed ?? null,
+      attachmentUrls: (answer.attachmentUrls ?? null) as string[] | null,
+    },
+  });
 
   // 激活中
-  if (rec.status === "pending") rec.status = "in_progress";
+  let newStatus = rec.status;
+  if (rec.status === "pending") {
+    newStatus = "in_progress";
+  }
 
-  // 检查是否所有必填题都填完 → 自动完成
+  // 重新拉最新答案，检查必填题是否全部完成
+  const freshAnswers = await prisma.broadcastAnchorAnswer.findMany({ where: { recordId: rec.id } });
   const allRequiredDone = task.questions.every((q) => {
     if (!q.isRequired) return true;
-    const ans = rec.answers.find((a) => a.questionId === q.id);
+    const ans = freshAnswers.find((a) => a.questionId === q.id);
     if (!ans) return false;
-    if (q.itemType === "QA" || q.itemType === "FILL_BLANK") return !!ans.answerText?.trim();
-    if (q.itemType === "SINGLE_CHOICE" || q.itemType === "MULTI_CHOICE") return (ans.answerOptions?.length ?? 0) > 0;
+    if (q.itemType === "QA" || q.itemType === "FILL_BLANK") return !!(ans.answerText?.trim());
+    if (q.itemType === "SINGLE_CHOICE" || q.itemType === "MULTI_CHOICE")
+      return (Array.isArray(ans.answerOptions) ? ans.answerOptions.length : 0) > 0;
     if (q.itemType === "LINK") return !!ans.isLinkConfirmed;
-    if (q.itemType === "ATTACHMENT") return (ans.attachmentUrls?.length ?? 0) > 0;
+    if (q.itemType === "ATTACHMENT")
+      return (Array.isArray(ans.attachmentUrls) ? ans.attachmentUrls.length : 0) > 0;
     return false;
   });
 
   let recordCompleted = false;
-  const now = new Date().toISOString();
-  if (allRequiredDone && (rec.status as string) !== "submitted") {
-    rec.status = "submitted";
-    rec.submittedAt = now;
+  const now = new Date();
+  if (allRequiredDone && newStatus !== "submitted") {
+    newStatus = "submitted";
     recordCompleted = true;
   }
 
-  task.updatedAt = now;
-  await saveDb(db);
+  // 更新主播记录状态
+  const updatedRec = await prisma.broadcastAnchorRecord.update({
+    where: { id: rec.id },
+    data: {
+      status: newStatus,
+      submittedAt: recordCompleted ? now : undefined,
+    },
+    include: { answers: true },
+  });
 
-  const { anchorRecords: _drop, ...taskBase } = task;
+  // 组装 BroadcastTaskForAnchor 返回
+  const taskBase = {
+    id: task.id,
+    title: task.title,
+    description: task.description,
+    dueAt: task.dueAt ? task.dueAt.toISOString() : null,
+    createdByUserId: task.createdByUserId,
+    createdByIdentityId: task.createdByIdentityId,
+    createdByName: task.createdByName,
+    hallOrgId: task.hallOrgId,
+    hallOrgName: task.hallOrgName,
+    questions: task.questions.map(mapQuestion),
+    status: task.status as BroadcastTask["status"],
+    createdAt: task.createdAt.toISOString(),
+    updatedAt: task.updatedAt.toISOString(),
+  };
+
   return {
     success: true,
-    task: { ...taskBase, myRecord: rec },
+    task: {
+      ...taskBase,
+      myRecord: {
+        ...mapAnchorRecord(updatedRec),
+        answers: mapAnswers(updatedRec.answers),
+      },
+    },
     recordCompleted,
   };
 }
 
-// ─── 懒过期（到截止时间自动 ended） ────────────────────────────────────────────
-function autoExpire(db: BroadcastDb) {
-  const now = new Date();
-  for (const task of db.tasks) {
-    if (task.status === "active" && task.dueAt && new Date(task.dueAt) < now) {
-      task.status = "ended";
-      task.updatedAt = now.toISOString();
-      // 同步过期主播记录
-      for (const rec of task.anchorRecords) {
-        if (rec.status === "pending" || rec.status === "in_progress") {
-          rec.status = "overdue";
-        }
-      }
-    }
+// ─── 查询"我的"群发任务 ────────────────────────────────────────────────────────
+export async function getBroadcastTasksForAnchor(userId: string): Promise<BroadcastTaskForAnchor[]> {
+  await applyExpire();
+
+  const records = await prisma.broadcastAnchorRecord.findMany({
+    where: { anchorUserId: userId },
+    include: {
+      task: { include: { questions: { orderBy: { id: "asc" } } } },
+      answers: true,
+    },
+    orderBy: { task: { createdAt: "desc" } },
+  });
+
+  const result: BroadcastTaskForAnchor[] = [];
+  for (const rec of records) {
+    // 已结束任务不推送给主播
+    if (rec.task.status === "ended") continue;
+
+    const taskBase = {
+      id: rec.task.id,
+      title: rec.task.title,
+      description: rec.task.description,
+      dueAt: rec.task.dueAt ? rec.task.dueAt.toISOString() : null,
+      createdByUserId: rec.task.createdByUserId,
+      createdByIdentityId: rec.task.createdByIdentityId,
+      createdByName: rec.task.createdByName,
+      hallOrgId: rec.task.hallOrgId,
+      hallOrgName: rec.task.hallOrgName,
+      questions: rec.task.questions.map(mapQuestion),
+      status: rec.task.status as BroadcastTask["status"],
+      createdAt: rec.task.createdAt.toISOString(),
+      updatedAt: rec.task.updatedAt.toISOString(),
+    };
+
+    result.push({
+      ...taskBase,
+      myRecord: {
+        ...mapAnchorRecord(rec),
+        answers: mapAnswers(rec.answers),
+      },
+    });
   }
+  return result;
 }

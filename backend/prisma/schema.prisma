@@ -874,3 +874,209 @@ model ExportTask {
   @@index([expiresAt])
   @@map("export_tasks")
 }
+
+// ════════════════════════════════════════════════════════════
+// 厅内直达（Broadcast）任务体系
+// ════════════════════════════════════════════════════════════
+
+/// 厅内直达任务主表
+model BroadcastTask {
+  id                  String                  @id @default(uuid())
+  title               String
+  description         String?                 @db.Text
+  dueAt               DateTime?               @map("due_at")
+  createdByUserId     String                  @map("created_by_user_id")
+  createdByIdentityId String                  @map("created_by_identity_id")
+  createdByName       String                  @map("created_by_name")
+  hallOrgId           String                  @map("hall_org_id")
+  hallOrgName         String                  @map("hall_org_name")
+  status              BroadcastTaskStatus     @default(active)
+  createdAt           DateTime                @default(now()) @map("created_at")
+  updatedAt           DateTime                @updatedAt @map("updated_at")
+  questions           BroadcastQuestion[]
+  anchorRecords       BroadcastAnchorRecord[]
+
+  @@index([createdByUserId])
+  @@index([hallOrgId])
+  @@index([status, dueAt])
+  @@map("broadcast_tasks")
+}
+
+/// 厅内直达任务题目
+model BroadcastQuestion {
+  id         String                @id @default(uuid())
+  taskId     String                @map("task_id")
+  title      String
+  itemType   BroadcastQuestionType @map("item_type")
+  isRequired Boolean               @map("is_required")
+  options    Json                  @default("[]")
+  linkUrl    String?               @map("link_url")
+  task       BroadcastTask         @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  answers    BroadcastAnchorAnswer[]
+
+  @@index([taskId])
+  @@map("broadcast_questions")
+}
+
+/// 主播参与记录（每任务每主播一条）
+model BroadcastAnchorRecord {
+  id             String                @id @default(uuid())
+  taskId         String                @map("task_id")
+  anchorUserId   String                @map("anchor_user_id")
+  anchorNickname String                @map("anchor_nickname")
+  anchorPhone    String                @map("anchor_phone")
+  anchorDouyinNo String?               @map("anchor_douyin_no")
+  anchorOrgId    String?               @map("anchor_org_id")
+  anchorOrgName  String?               @map("anchor_org_name")
+  status         BroadcastAnchorStatus @default(pending)
+  submittedAt    DateTime?             @map("submitted_at")
+  task           BroadcastTask         @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  answers        BroadcastAnchorAnswer[]
+
+  @@unique([taskId, anchorUserId])
+  @@index([anchorUserId])
+  @@map("broadcast_anchor_records")
+}
+
+/// 主播答案（每记录每题目一条）
+model BroadcastAnchorAnswer {
+  id              String                @id @default(uuid())
+  recordId        String                @map("record_id")
+  questionId      String                @map("question_id")
+  answerText      String?               @db.Text @map("answer_text")
+  answerOptions   Json?                 @map("answer_options")
+  isLinkConfirmed Boolean?              @map("is_link_confirmed")
+  attachmentUrls  Json?                 @map("attachment_urls")
+  record          BroadcastAnchorRecord @relation(fields: [recordId], references: [id], onDelete: Cascade)
+  question        BroadcastQuestion     @relation(fields: [questionId], references: [id], onDelete: Cascade)
+
+  @@unique([recordId, questionId])
+  @@map("broadcast_anchor_answers")
+}
+
+enum BroadcastTaskStatus {
+  active
+  ended
+}
+
+enum BroadcastAnchorStatus {
+  pending
+  in_progress
+  submitted
+  overdue
+}
+
+enum BroadcastQuestionType {
+  QA
+  FILL_BLANK
+  SINGLE_CHOICE
+  MULTI_CHOICE
+  LINK
+  ATTACHMENT
+}
+
+// ════════════════════════════════════════════════════════════
+// 流转式任务（Workflow）体系
+// ════════════════════════════════════════════════════════════
+
+/// 流转式任务主表
+model WorkflowTask {
+  id                  String             @id @default(uuid())
+  title               String
+  description         String?            @db.Text
+  targetOrgId         String             @map("target_org_id")
+  targetOrgName       String             @map("target_org_name")
+  issuerOrgId         String?            @map("issuer_org_id")
+  issuerOrgName       String?            @map("issuer_org_name")
+  issuerScopePath     String?            @map("issuer_scope_path")
+  createdByUserId     String             @map("created_by_user_id")
+  createdByIdentityId String             @map("created_by_identity_id")
+  createdByName       String             @map("created_by_name")
+  dueAt               DateTime?          @map("due_at")
+  status              WorkflowTaskStatus @default(in_progress)
+  currentStepOrder    Int                @default(1) @map("current_step_order")
+  createdAt           DateTime           @default(now()) @map("created_at")
+  updatedAt           DateTime           @updatedAt @map("updated_at")
+  steps               WorkflowStep[]
+
+  @@index([createdByUserId])
+  @@index([status])
+  @@map("workflow_tasks")
+}
+
+/// 流转节点
+model WorkflowStep {
+  id                String             @id @default(uuid())
+  taskId            String             @map("task_id")
+  order             Int
+  title             String
+  requirement       String             @db.Text
+  assigneeUserId    String             @map("assignee_user_id")
+  assigneeName      String             @map("assignee_name")
+  assigneeOrgId     String?            @map("assignee_org_id")
+  assigneeOrgName   String?            @map("assignee_org_name")
+  status            WorkflowStepStatus @default(active)
+  submittedAt       DateTime?          @map("submitted_at")
+  submittedByUserId String?            @map("submitted_by_user_id")
+  completedAt       DateTime?          @map("completed_at")
+  task              WorkflowTask       @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  questions         WorkflowQuestion[]
+  answers           WorkflowAnswer[]
+
+  @@index([taskId])
+  @@index([assigneeUserId])
+  @@map("workflow_steps")
+}
+
+/// 节点题目
+model WorkflowQuestion {
+  id         String               @id @default(uuid())
+  stepId     String               @map("step_id")
+  title      String
+  itemType   WorkflowQuestionType @map("item_type")
+  isRequired Boolean              @map("is_required")
+  options    Json                 @default("[]")
+  linkUrl    String?              @map("link_url")
+  step       WorkflowStep         @relation(fields: [stepId], references: [id], onDelete: Cascade)
+  answers    WorkflowAnswer[]
+
+  @@index([stepId])
+  @@map("workflow_questions")
+}
+
+/// 节点答案（每节点每题目一条）
+model WorkflowAnswer {
+  id              String           @id @default(uuid())
+  stepId          String           @map("step_id")
+  questionId      String           @map("question_id")
+  answerText      String?          @db.Text @map("answer_text")
+  answerOptions   Json?            @map("answer_options")
+  isLinkConfirmed Boolean?         @map("is_link_confirmed")
+  attachmentUrls  Json?            @map("attachment_urls")
+  step            WorkflowStep     @relation(fields: [stepId], references: [id], onDelete: Cascade)
+  question        WorkflowQuestion @relation(fields: [questionId], references: [id], onDelete: Cascade)
+
+  @@unique([stepId, questionId])
+  @@map("workflow_answers")
+}
+
+enum WorkflowTaskStatus {
+  in_progress
+  completed
+  ended
+}
+
+enum WorkflowStepStatus {
+  pending
+  active
+  completed
+}
+
+enum WorkflowQuestionType {
+  QA
+  FILL_BLANK
+  SINGLE_CHOICE
+  MULTI_CHOICE
+  LINK
+  ATTACHMENT
+}
