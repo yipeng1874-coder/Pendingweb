@@ -460,7 +460,7 @@ export function TaskRecordCard({ record, expanded, onToggle, onRefresh, formatDe
   }, [doneItems.length, isExpanded, pendingItems.length]);
 
   const isTemporaryTask = record.assignment?.category === "TEMPORARY";
-  const canApplyExemption = !isTemporaryTask && record.status !== "submitted" && !record.exemption;
+  const canApplyExemption = !isTemporaryTask && record.status !== "submitted" && (!record.exemption || record.exemption.status === "rejected");
   const exemptionStatusText = record.exemption?.status === "pending" ? "豁免审核中" : record.exemption?.status === "approved" ? "已批准豁免" : record.exemption?.status === "rejected" ? "豁免已拒绝" : null;
 
   async function handleApplyExemption() {
@@ -474,6 +474,19 @@ export function TaskRecordCard({ record, expanded, onToggle, onRefresh, formatDe
     } catch (error) {
       console.error(error);
       alert(getErrorMessage(error, "提交豁免失败，请稍后重试"));
+    } finally {
+      setExemptionLoading(false);
+    }
+  }
+
+  async function handleCancelExemption() {
+    setExemptionLoading(true);
+    try {
+      await recordApi.cancelExemption(record.id);
+      onRefresh();
+    } catch (error) {
+      console.error(error);
+      alert(getErrorMessage(error, "撤回失败，请稍后重试"));
     } finally {
       setExemptionLoading(false);
     }
@@ -683,7 +696,16 @@ export function TaskRecordCard({ record, expanded, onToggle, onRefresh, formatDe
           )}
           {canSubmitRecord && <button type="button" onClick={() => void handleSubmitRecord()} className={`flex w-full items-center justify-center gap-2 rounded-xl py-2.5 text-sm font-medium text-white transition ${record.status === "overdue" ? "bg-red-500 hover:bg-red-600" : "bg-blue-500 hover:bg-blue-600"}`}><Send size={14} />{record.status === "overdue" ? "提交补录" : "提交任务"}</button>}
 
-          {!isTemporaryTask && exemptionStatusText && <div className={`flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm ${record.exemption?.status === "approved" ? "bg-emerald-50 text-emerald-700" : record.exemption?.status === "rejected" ? "bg-red-50 text-red-600" : "bg-amber-50 text-amber-700"}`}><ShieldOff size={14} />{exemptionStatusText}{record.exemption?.status === "rejected" && "，如需再次申请请联系管理员"}</div>}
+          {!isTemporaryTask && exemptionStatusText && (
+            <div className={`flex items-center justify-between gap-2 rounded-xl px-4 py-2.5 text-sm ${record.exemption?.status === "approved" ? "bg-emerald-50 text-emerald-700" : record.exemption?.status === "rejected" ? "bg-red-50 text-red-600" : "bg-amber-50 text-amber-700"}`}>
+              <span className="flex items-center gap-2"><ShieldOff size={14} />{exemptionStatusText}{record.exemption?.status === "rejected" && "，可重新发起申请"}</span>
+              {(record.exemption?.status === "pending" || record.exemption?.status === "approved") && (
+                <button type="button" onClick={() => void handleCancelExemption()} disabled={exemptionLoading} className="shrink-0 rounded-lg border border-current px-2 py-0.5 text-xs opacity-70 transition hover:opacity-100 disabled:opacity-30">
+                  {exemptionLoading ? <Loader2 size={11} className="animate-spin" /> : "撤回申请"}
+                </button>
+              )}
+            </div>
+          )}
           {canApplyExemption && !showExemptionInput && <button type="button" onClick={() => setShowExemptionInput(true)} className="flex w-full items-center justify-center gap-1.5 rounded-xl border border-slate-200 py-2 text-sm text-slate-500 transition hover:border-amber-400 hover:text-amber-600"><ShieldOff size={14} />申请任务豁免</button>}
           {canApplyExemption && showExemptionInput && (
             <div className="space-y-2 rounded-xl border border-amber-200 bg-amber-50/70 p-3">

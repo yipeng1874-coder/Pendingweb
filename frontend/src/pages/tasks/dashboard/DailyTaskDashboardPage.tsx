@@ -131,16 +131,26 @@ function NodeSummary({ node, children = [], level = 0, taskDate, scopeOrgId, def
   }
 
   async function reviewExemption(approved: boolean) {
-    if (!selectedAnchor?.anchor.taskRecordId || !selectedAnchor.anchor.exemptionStatus) return;
-    const hallDetails = details;
-    const matched = hallDetails?.details.find((item) => item.userId === selectedAnchor.anchor.userId);
-    if (!matched?.taskRecordId) return;
+    const taskRecordId = selectedAnchor?.anchor.taskRecordId;
+    if (!taskRecordId || !selectedAnchor.anchor.exemptionStatus) return;
     setExemptionSaving(true);
     const exemptions = await recordApi.listExemptions("pending").catch(() => []);
-    const target = exemptions.find((item) => item.taskRecordId === matched.taskRecordId);
+    const target = exemptions.find((item) => item.taskRecordId === taskRecordId);
     if (target) {
       await recordApi.reviewExemption(target.id, approved).catch(() => null);
     }
+    const refreshed = await reportApi.getDailyDashboardAnchorItems(node.orgId, selectedAnchor.anchor.userId, taskDate, scopeOrgId).catch(() => null);
+    const refreshedHall = await reportApi.getDailyDashboardHallDetails(node.orgId, taskDate, scopeOrgId).catch(() => null);
+    if (refreshed) setSelectedAnchor(refreshed);
+    if (refreshedHall) setDetails(refreshedHall);
+    setExemptionSaving(false);
+  }
+
+  async function cancelExemptionByAdmin() {
+    const taskRecordId = selectedAnchor?.anchor.taskRecordId;
+    if (!taskRecordId) return;
+    setExemptionSaving(true);
+    await recordApi.cancelExemption(taskRecordId).catch(() => null);
     const refreshed = await reportApi.getDailyDashboardAnchorItems(node.orgId, selectedAnchor.anchor.userId, taskDate, scopeOrgId).catch(() => null);
     const refreshedHall = await reportApi.getDailyDashboardHallDetails(node.orgId, taskDate, scopeOrgId).catch(() => null);
     if (refreshed) setSelectedAnchor(refreshed);
@@ -339,20 +349,8 @@ function NodeSummary({ node, children = [], level = 0, taskDate, scopeOrgId, def
                               <button type="button" onClick={() => void reviewExemption(false)} disabled={exemptionSaving} className="rounded-xl bg-rose-600 px-3 py-2 text-xs font-medium text-white disabled:opacity-50">驳回豁免</button>
                             </>
                           )}
-                          {(selectedAnchor.anchor.exemptionStatus === "pending" || selectedAnchor.anchor.exemptionStatus === "approved") && (
-                            <button type="button" onClick={async () => {
-                              if (!selectedAnchor.anchor.taskRecordId) return;
-                              setExemptionSaving(true);
-                              await recordApi.cancelExemption(selectedAnchor.anchor.taskRecordId).catch(() => null);
-                              const refreshed = await reportApi.getDailyDashboardAnchorItems(node.orgId, selectedAnchor.anchor.userId, taskDate, scopeOrgId).catch(() => null);
-                              const refreshedHall = await reportApi.getDailyDashboardHallDetails(node.orgId, taskDate, scopeOrgId).catch(() => null);
-                              if (refreshed) {
-                                setSelectedAnchor(refreshed);
-                                setExemptionReasonInput(refreshed.anchor.exemptionReason ?? "");
-                              }
-                              if (refreshedHall) setDetails(refreshedHall);
-                              setExemptionSaving(false);
-                            }} disabled={exemptionSaving} className="rounded-xl border border-amber-300 bg-white px-3 py-2 text-xs font-medium text-amber-700 disabled:opacity-50">{selectedAnchor.anchor.exemptionStatus === "pending" ? "回撤申请" : "取消豁免"}</button>
+                          {selectedAnchor.anchor.exemptionStatus === "approved" && (
+                            <button type="button" onClick={() => void cancelExemptionByAdmin()} disabled={exemptionSaving} className="rounded-xl border border-amber-400 bg-white px-3 py-2 text-xs font-medium text-amber-700 disabled:opacity-50">取消豁免</button>
                           )}
                         </div>
                       </div>
