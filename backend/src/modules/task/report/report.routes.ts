@@ -1835,7 +1835,7 @@ reportRoutes.get("/tasks/report/hall-daily-dashboard", permissionRequired("task:
     return fail(res, "HALL_DAILY_DASHBOARD_FORBIDDEN", "当前身份无权查看厅管日常任务看板", 403);
   }
   if (roleCode !== "HALL_MANAGER") {
-    return fail(res, "HALL_DAILY_DASHBOARD_ROLE_REQUIRED", "厅管日常任务看板仅厅管角色可查看", 403);
+    return fail(res, "HALL_DAILY_DASHBOARD_ROLE_REQUIRED", "厅管日常任务看板仅厅管角色可使用本接口，管理员请使用 /hall-daily-dashboard/overview", 403);
   }
 
   const taskDate = t(req.query.taskDate) || formatBeijingDate(new Date());
@@ -1945,6 +1945,409 @@ reportRoutes.get("/tasks/report/hall-daily-dashboard", permissionRequired("task:
               answerText: ir?.answerText ?? null,
               answerOptions: Array.isArray(ir?.answerOptions) ? ir.answerOptions : null,
               isLinkConfirmed: ir?.isLinkConfirmed ?? false,
+            };
+          }),
+        }
+      : null,
+  });
+});
+
+// ── 厅管日常任务看板：管理员总览（按基地→团队汇总）──────────────────────────
+reportRoutes.get("/tasks/report/hall-daily-dashboard/overview", permissionRequired("task:report:view"), async (req: any, res: any) => {
+  const roleCode = req.identity?.roleCode;
+  const allowedAdminRoles = ["DEV_ADMIN", "HQ_ADMIN", "BASE_ADMIN", "TEAM_ADMIN"];
+  if (!allowedAdminRoles.includes(roleCode)) {
+    return fail(res, "HALL_DAILY_OVERVIEW_FORBIDDEN", "当前身份无权查看厅管日常任务管理员看板", 403);
+  }
+
+  const taskDate = t(req.query.taskDate) || formatBeijingDate(new Date());
+  const scopeOrgId = t(req.query.scopeOrgId) || undefined;
+
+  const baseOrg = await resolveBaseScopeOrg(scopeOrgId, req.identity).catch((error: Error) => error);
+  if (baseOrg instanceof Error) {
+    if (baseOrg.message === "BASE_SCOPE_REQUIRED") return fail(res, "BASE_SCOPE_REQUIRED", "请先选择基地后查看厅管日常任务看板", 400);
+    if (baseOrg.message === "SCOPE_ORG_NOT_FOUND") return fail(res, "SCOPE_ORG_NOT_FOUND", "当前基地不存在或已停用", 404);
+    if (baseOrg.message === "SCOPE_ORG_FORBIDDEN") return fail(res, "SCOPE_ORG_FORBIDDEN", "当前身份无权查看该基地", 403);
+    return fail(res, "HALL_DAILY_OVERVIEW_SCOPE_FAILED", "看板基地解析失败", 500);
+  }
+
+  const now = new Date();
+  const today = formatBeijingDate(now);
+  const { canSupplementYesterday } = getDailyTaskContext(now);
+  const phase = taskDate === today
+    ? (now.getTime() <= getDailyTaskDayEnd(taskDate).getTime() ? "in_progress" : "supplement")
+    : (now.getTime() < getDailyTaskSupplementDeadline(taskDate).getTime() ? "supplement" : "closed");
+
+  // TEAM_ADMIN scope 过滤
+  const viewerScopePath = req.identity?.scopePath;
+
+  // ① 查询基地下全量 active 团队（用于展示"未参与任务"的团队）
+  const allTeams = await prisma.orgUnit.findMany({
+    where: {
+      status: "active",
+      orgType: "TEAM",
+      path: { startsWith: `${baseOrg.path}/` },
+    },
+    select: { id: true, name: true, path: true },
+    orderBy: { path: "asc" },
+  });
+
+  // TEAM_ADMIN 只能看自己团队（精确匹配或子路径）
+  const scopedTeams = roleCode === "TEAM_ADMIN" && viewerScopePath
+    ? allTeams.filter((t) => t.path === viewerScopePath || t.path.startsWith(`${viewerScopePath}/`))
+    : allTeams;
+
+  // ② 查询基地下全量 active 厅（用于展示"未参与任务"的厅）
+  const scopedTeamIds = scopedTeams.map((t) => t.id);
+  const allHalls = scopedTeamIds.length ? await prisma.orgUnit.findMany({
+    where: { status: "active", orgType: "HALL", parentId: { in: scopedTeamIds } },
+    select: { id: true, name: true, path: true, parentId: true },
+  }) : [];
+
+  // ③ 直接查询 taskDate 当天有 HallTaskRecord 的厅（权威数据源，精确到日期）
+  const allHallIdsArr = allHalls.map((h) => h.id);
+  const records = allHallIdsArr.length ? await prisma.hallTaskRecord.findMany({
+    where: {
+      hallOrgId: { in: allHallIdsArr },
+      recordDate: taskDate,
+      assignment: {
+        status: { in: ["active", "ended"] },
+        teamOrgId: { in: scopedTeamIds },
+      },
+    },
+    select: {
+      id: true,
+      hallOrgId: true,
+      assignmentId: true,
+      status: true,
+      totalItems: true,
+      doneItems: true,
+      submittedAt: true,
+      createdAt: true,
+      assignment: {
+        select: {
+          status: true,
+          teamOrgId: true,
+          template: { select: { title: true } },
+        },
+      },
+    },
+    orderBy: { createdAt: "desc" },
+  }) : [];
+
+  // 从 records 推导当天真实有任务的厅集合
+  const assignedHallIds = new Set(records.map((r) => r.hallOrgId));
+
+  // ④ 每个厅取当天最优一条 record：active assignment 优先，都是 ended 则取 createdAt 最晚的
+  const hallRecordMap = new Map<string, typeof records[number]>();
+  for (const rec of records) {
+    const existing = hallRecordMap.get(rec.hallOrgId);
+    if (!existing) {
+      hallRecordMap.set(rec.hallOrgId, rec);
+    } else if (rec.assignment.status === "active" && existing.assignment.status !== "active") {
+      // active 优先
+      hallRecordMap.set(rec.hallOrgId, rec);
+    } else if (rec.assignment.status !== "active" && existing.assignment.status !== "active"
+      && rec.createdAt > existing.createdAt) {
+      // 同为 ended，取创建时间更晚的（即对应更晚生效的任务）
+      hallRecordMap.set(rec.hallOrgId, rec);
+    }
+  }
+
+  // teamOrgId -> templateTitle（从 hallRecordMap 取，确保对应当天实际显示的任务）
+  const teamTemplateTitleMap = new Map<string, string>();
+  for (const rec of hallRecordMap.values()) {
+    const teamId = rec.assignment.teamOrgId;
+    if (teamId && rec.assignment.template?.title && !teamTemplateTitleMap.has(teamId)) {
+      teamTemplateTitleMap.set(teamId, rec.assignment.template.title);
+    }
+  }
+
+  // ⑤ 统计每个团队（全量，包含无任务团队）
+  const teamSummaries = scopedTeams.map((team) => {
+    const teamAllHalls = allHalls.filter((h) => h.parentId === team.id);
+    const teamAssignedHallIds = teamAllHalls.filter((h) => assignedHallIds.has(h.id)).map((h) => h.id);
+
+    const totalHalls = teamAllHalls.length;      // 团队下全量厅数
+    const assignedHalls = teamAssignedHallIds.length; // 参与任务的厅数
+    const hasTask = assignedHalls > 0;
+
+    let submittedCount = 0;
+    let inProgressCount = 0;
+    let pendingCount = 0;
+    let overdueCount = 0;
+    let noRecordCount = 0;
+
+    for (const hallId of teamAssignedHallIds) {
+      const rec = hallRecordMap.get(hallId);
+      if (!rec) {
+        noRecordCount += 1;
+      } else if (rec.status === "submitted") {
+        submittedCount += 1;
+      } else if (rec.status === "in_progress") {
+        inProgressCount += 1;
+      } else if (rec.status === "overdue") {
+        overdueCount += 1;
+      } else {
+        pendingCount += 1;
+      }
+    }
+
+    // 完成率 = 已提交 / 参与任务的厅（分母不排除 noRecord，保留透明度）
+    const completionRate = assignedHalls > 0 ? Math.round((submittedCount / assignedHalls) * 100) : 0;
+
+    return {
+      teamOrgId: team.id,
+      teamOrgName: team.name,
+      hasTask,
+      totalHalls,
+      assignedHalls,
+      submittedCount,
+      inProgressCount,
+      pendingCount,
+      overdueCount,
+      noRecordCount,
+      completionRate,
+      templateTitle: teamTemplateTitleMap.get(team.id) ?? null,
+    };
+  });
+
+  // 基地整体汇总
+  const baseTotalTeams = scopedTeams.length;
+  const baseAssignedTeams = teamSummaries.filter((t) => t.hasTask).length;
+  const baseTotalHalls = allHalls.length;
+  const baseAssignedHalls = assignedHallIds.size;
+  const baseSubmittedHalls = teamSummaries.reduce((s, t) => s + t.submittedCount, 0);
+  const baseCompletionRate = baseAssignedHalls > 0 ? Math.round((baseSubmittedHalls / baseAssignedHalls) * 100) : 0;
+
+  return ok(res, {
+    taskDate,
+    phase,
+    baseOrg: { id: baseOrg.id, name: baseOrg.name },
+    quickRanges: {
+      today,
+      yesterday: addBeijingDays(today, -1),
+      canSupplementYesterday,
+    },
+    baseSummary: {
+      totalTeams: baseTotalTeams,
+      assignedTeams: baseAssignedTeams,
+      totalHalls: baseTotalHalls,
+      assignedHalls: baseAssignedHalls,
+      submittedHalls: baseSubmittedHalls,
+      completionRate: baseCompletionRate,
+    },
+    teams: teamSummaries,
+  });
+});
+
+// ── 厅管日常任务看板：管理员-某团队下各厅进度列表 ─────────────────────────────
+reportRoutes.get("/tasks/report/hall-daily-dashboard/teams/:teamOrgId/halls", permissionRequired("task:report:view"), async (req: any, res: any) => {
+  const roleCode = req.identity?.roleCode;
+  const allowedAdminRoles = ["DEV_ADMIN", "HQ_ADMIN", "BASE_ADMIN", "TEAM_ADMIN"];
+  if (!allowedAdminRoles.includes(roleCode)) {
+    return fail(res, "HALL_DAILY_TEAM_HALLS_FORBIDDEN", "当前身份无权查看", 403);
+  }
+
+  const { teamOrgId } = req.params;
+  const taskDate = t(req.query.taskDate) || formatBeijingDate(new Date());
+
+  const team = await prisma.orgUnit.findFirst({
+    where: { id: teamOrgId, status: "active", orgType: "TEAM" },
+    select: { id: true, name: true, path: true },
+  });
+  if (!team) return fail(res, "TEAM_ORG_NOT_FOUND", "团队不存在或已停用", 404);
+
+  // scope 校验：TEAM_ADMIN 只能看自己团队
+  const viewerScopePath = req.identity?.scopePath;
+  if (roleCode === "TEAM_ADMIN" && viewerScopePath) {
+    if (!(team.path === viewerScopePath || team.path.startsWith(`${viewerScopePath}/`))) {
+      return fail(res, "SCOPE_ORG_FORBIDDEN", "当前身份无权查看该团队", 403);
+    }
+  }
+
+  // ① 查询团队下全量 active 厅
+  const allTeamHalls = await prisma.orgUnit.findMany({
+    where: { status: "active", orgType: "HALL", parentId: teamOrgId },
+    select: { id: true, name: true },
+    orderBy: { name: "asc" },
+  });
+
+  // ② 直接查询 taskDate 当天有 HallTaskRecord 的厅（权威数据源，精确到日期）
+  const allTeamHallIds = allTeamHalls.map((h) => h.id);
+  const records = allTeamHallIds.length ? await prisma.hallTaskRecord.findMany({
+    where: {
+      hallOrgId: { in: allTeamHallIds },
+      recordDate: taskDate,
+      assignment: {
+        status: { in: ["active", "ended"] },
+        teamOrgId,
+      },
+    },
+    select: {
+      id: true,
+      hallOrgId: true,
+      status: true,
+      totalItems: true,
+      doneItems: true,
+      submittedAt: true,
+      assignmentId: true,
+      createdAt: true,
+      assignment: { select: { status: true } },
+    },
+    orderBy: { createdAt: "desc" },
+  }) : [];
+
+  // 从 records 推导当天真实有任务的厅集合
+  const assignedHallIds = new Set(records.map((r) => r.hallOrgId));
+
+  // 每个厅取最优一条：active assignment 优先，都是 ended 则取 createdAt 最晚的（对应最后生效的任务）
+  const hallRecordMap = new Map<string, typeof records[number]>();
+  for (const rec of records) {
+    const existing = hallRecordMap.get(rec.hallOrgId);
+    if (!existing) {
+      hallRecordMap.set(rec.hallOrgId, rec);
+    } else if (rec.assignment.status === "active" && existing.assignment.status !== "active") {
+      hallRecordMap.set(rec.hallOrgId, rec);
+    } else if (rec.assignment.status !== "active" && existing.assignment.status !== "active"
+      && rec.createdAt > existing.createdAt) {
+      hallRecordMap.set(rec.hallOrgId, rec);
+    }
+  }
+
+  // ④ 返回全量厅列表（有任务的含进度，无任务的 hasTask=false）
+  const result = allTeamHalls.map((hall) => {
+    const hasTask = assignedHallIds.has(hall.id);
+    const rec = hasTask ? hallRecordMap.get(hall.id) : undefined;
+    return {
+      hallOrgId: hall.id,
+      hallOrgName: hall.name,
+      hasTask,
+      status: rec?.status ?? null,
+      totalItems: rec?.totalItems ?? 0,
+      doneItems: rec?.doneItems ?? 0,
+      completionRate: rec?.totalItems ? Math.round((rec.doneItems / rec.totalItems) * 100) : 0,
+      submittedAt: rec?.submittedAt?.toISOString() ?? null,
+      recordId: rec?.id ?? null,
+    };
+  });
+
+  return ok(res, result);
+});
+
+// ── 厅管日常任务看板：管理员-某厅详情（只读）────────────────────────────────
+reportRoutes.get("/tasks/report/hall-daily-dashboard/halls/:hallOrgId/detail", permissionRequired("task:report:view"), async (req: any, res: any) => {
+  const roleCode = req.identity?.roleCode;
+  const allowedAdminRoles = ["DEV_ADMIN", "HQ_ADMIN", "BASE_ADMIN", "TEAM_ADMIN"];
+  if (!allowedAdminRoles.includes(roleCode)) {
+    return fail(res, "HALL_DAILY_HALL_DETAIL_FORBIDDEN", "当前身份无权查看", 403);
+  }
+
+  const { hallOrgId } = req.params;
+  const taskDate = t(req.query.taskDate) || formatBeijingDate(new Date());
+
+  const hall = await prisma.orgUnit.findFirst({
+    where: { id: hallOrgId, status: "active", orgType: "HALL" },
+    select: { id: true, name: true, path: true, parentId: true },
+  });
+  if (!hall) return fail(res, "HALL_NOT_FOUND", "直播厅不存在或已停用", 404);
+
+  // scope 校验
+  const viewerScopePath = req.identity?.scopePath;
+  if (viewerScopePath && roleCode !== "DEV_ADMIN") {
+    const inScope = hall.path === viewerScopePath || hall.path.startsWith(`${viewerScopePath}/`);
+    if (!inScope) return fail(res, "SCOPE_ORG_FORBIDDEN", "当前身份无权查看该直播厅", 403);
+  }
+
+  const now = new Date();
+  const today = formatBeijingDate(now);
+  const phase = taskDate === today
+    ? (now.getTime() <= getDailyTaskDayEnd(taskDate).getTime() ? "in_progress" : "supplement")
+    : (now.getTime() < getDailyTaskSupplementDeadline(taskDate).getTime() ? "supplement" : "closed");
+
+  const records = await prisma.hallTaskRecord.findMany({
+    where: {
+      hallOrgId,
+      recordDate: taskDate,
+      assignment: { status: { in: ["active", "ended"] } },
+    },
+    include: {
+      assignment: {
+        include: {
+          template: {
+            include: {
+              items: {
+                orderBy: { sortOrder: "asc" },
+                select: { id: true, title: true, itemType: true, isRequired: true, sortOrder: true, linkUrl: true },
+              },
+            },
+          },
+        },
+      },
+      itemRecords: {
+        orderBy: { id: "asc" },
+        include: {
+          attachments: {
+            select: { id: true, fileName: true, fileUrl: true, fileSize: true, mimeType: true },
+          },
+        },
+      },
+    },
+    orderBy: { createdAt: "desc" },
+  });
+
+  // active assignment 优先；都是 ended 则取 createdAt 最晚的（对应最后生效的任务）
+  const activeRecord = records.find((r) => r.assignment.status === "active")
+    ?? records.reduce<typeof records[number] | null>((best, rec) => {
+      if (!best) return rec;
+      return rec.createdAt > best.createdAt ? rec : best;
+    }, null);
+
+  const summary = {
+    status: activeRecord?.status ?? null,
+    totalItems: activeRecord?.totalItems ?? 0,
+    doneItems: activeRecord?.doneItems ?? 0,
+    submittedAt: activeRecord?.submittedAt?.toISOString() ?? null,
+    completionRate: activeRecord?.totalItems
+      ? Math.round((activeRecord.doneItems / activeRecord.totalItems) * 100)
+      : 0,
+  };
+
+  return ok(res, {
+    taskDate,
+    phase,
+    hall: { id: hall.id, name: hall.name },
+    summary,
+    record: activeRecord
+      ? {
+          id: activeRecord.id,
+          assignmentId: activeRecord.assignmentId,
+          status: activeRecord.status,
+          totalItems: activeRecord.totalItems,
+          doneItems: activeRecord.doneItems,
+          submittedAt: activeRecord.submittedAt?.toISOString() ?? null,
+          templateTitle: activeRecord.assignment.template?.title ?? null,
+          items: (activeRecord.assignment.template?.items ?? []).map((item) => {
+            const ir = activeRecord.itemRecords.find((r) => r.taskItemId === item.id);
+            return {
+              taskItemId: item.id,
+              title: item.title,
+              itemType: item.itemType,
+              isRequired: item.isRequired,
+              sortOrder: item.sortOrder,
+              linkUrl: item.linkUrl ?? null,
+              done: ir?.status === "done",
+              doneAt: ir?.doneAt?.toISOString() ?? null,
+              answerText: ir?.answerText ?? null,
+              answerOptions: Array.isArray(ir?.answerOptions) ? ir.answerOptions : null,
+              isLinkConfirmed: ir?.isLinkConfirmed ?? false,
+              attachments: (ir?.attachments ?? []).map((a) => ({
+                id: a.id,
+                fileName: a.fileName,
+                fileUrl: a.fileUrl,
+                fileSize: a.fileSize,
+                mimeType: a.mimeType,
+              })),
             };
           }),
         }

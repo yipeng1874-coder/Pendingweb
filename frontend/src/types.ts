@@ -501,6 +501,96 @@ export interface HallDailyDashboardResponse {
   } | null;
 }
 
+// ── 厅管日常任务看板：管理员视角 ─────────────────────────────────────────────
+
+export interface HallDailyAdminTeamSummary {
+  teamOrgId: string;
+  teamOrgName: string;
+  /** 是否有任务分配（false 表示未参与任务，仅展示用） */
+  hasTask: boolean;
+  /** 团队下全量 active 厅数 */
+  totalHalls: number;
+  /** 参与任务的厅数（有 Assignment target） */
+  assignedHalls: number;
+  submittedCount: number;
+  inProgressCount: number;
+  pendingCount: number;
+  overdueCount: number;
+  /** 有任务分配但当天记录尚未生成的厅数 */
+  noRecordCount: number;
+  /** 完成率 = submittedCount / assignedHalls */
+  completionRate: number;
+  /** 当天任务模板标题（无任务时为 null） */
+  templateTitle: string | null;
+}
+
+export interface HallDailyAdminBaseSummary {
+  totalTeams: number;
+  assignedTeams: number;
+  totalHalls: number;
+  assignedHalls: number;
+  submittedHalls: number;
+  completionRate: number;
+}
+
+export interface HallDailyAdminOverviewResponse {
+  taskDate: string;
+  phase: "in_progress" | "supplement" | "closed";
+  baseOrg: { id: string; name: string };
+  quickRanges: { today: string; yesterday: string; canSupplementYesterday: boolean };
+  baseSummary: HallDailyAdminBaseSummary;
+  teams: HallDailyAdminTeamSummary[];
+}
+
+export interface HallDailyAdminHallRow {
+  hallOrgId: string;
+  hallOrgName: string;
+  /** 是否有任务分配（false 表示未参与任务，仅展示用） */
+  hasTask: boolean;
+  status: "pending" | "in_progress" | "submitted" | "overdue" | null;
+  totalItems: number;
+  doneItems: number;
+  completionRate: number;
+  submittedAt: string | null;
+  recordId: string | null;
+}
+
+export interface HallDailyAdminHallDetailResponse {
+  taskDate: string;
+  phase: "in_progress" | "supplement" | "closed";
+  hall: { id: string; name: string };
+  summary: {
+    status: "pending" | "in_progress" | "submitted" | "overdue" | null;
+    totalItems: number;
+    doneItems: number;
+    submittedAt: string | null;
+    completionRate: number;
+  };
+  record: {
+    id: string;
+    assignmentId: string;
+    status: "pending" | "in_progress" | "submitted" | "overdue";
+    totalItems: number;
+    doneItems: number;
+    submittedAt: string | null;
+    templateTitle: string | null;
+    items: Array<{
+      taskItemId: string;
+      title: string;
+      itemType: string;
+      isRequired: boolean;
+      sortOrder: number;
+      linkUrl: string | null;
+      done: boolean;
+      doneAt: string | null;
+      answerText: string | null;
+      answerOptions: string[] | null;
+      isLinkConfirmed: boolean;
+      attachments: Array<{ id: string; fileName: string; fileUrl: string; fileSize: number; mimeType: string }>;
+    }>;
+  } | null;
+}
+
 export interface DailyDashboardAnchorItemDetailResponse {
   taskDate: string;
   baseOrg: { id: string; name: string; orgType: string };

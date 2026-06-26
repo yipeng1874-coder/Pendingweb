@@ -789,7 +789,9 @@ export const HallDailyRecordService = {
             },
           },
         },
-        itemRecords: true,
+        itemRecords: {
+          include: { attachments: true },
+        },
       },
       orderBy: { recordDate: "desc" },
     });

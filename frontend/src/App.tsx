@@ -75,7 +75,7 @@ export default function App() {
           <Route path="/tasks/cockpit" element={<CockpitPage />} />
           <Route path="/tasks/dashboard" element={<TaskDashboardPage />} />
           <Route path="/tasks/dashboard/daily-board" element={<RoleProtected roles={["DEV_ADMIN", "HQ_ADMIN", "BASE_ADMIN", "TEAM_ADMIN", "HALL_MANAGER"]} permissions={["task:report:view"]}><DailyTaskDashboardPage /></RoleProtected>} />
-          <Route path="/tasks/dashboard/hall-daily-board" element={<RoleProtected roles={["HALL_MANAGER"]} permissions={["task:report:view"]}><HallDailyDashboardPage /></RoleProtected>} />
+          <Route path="/tasks/dashboard/hall-daily-board" element={<RoleProtected roles={["DEV_ADMIN", "HQ_ADMIN", "BASE_ADMIN", "TEAM_ADMIN", "HALL_MANAGER"]} permissions={["task:report:view"]}><HallDailyDashboardPage /></RoleProtected>} />
           <Route path="/tasks/dashboard/temporary-board" element={<RoleProtected roles={["DEV_ADMIN", "HQ_ADMIN", "BASE_ADMIN", "TEAM_ADMIN"]}><TemporaryTaskDashboardPage /></RoleProtected>} />
           <Route path="/tasks/dashboard/workflow-board" element={<RoleProtected roles={["DEV_ADMIN", "HQ_ADMIN", "BASE_ADMIN", "TEAM_ADMIN", "HALL_MANAGER"]}><WorkflowBoardPage /></RoleProtected>} />
           <Route path="/tasks/reminders" element={<ReminderPage />} />

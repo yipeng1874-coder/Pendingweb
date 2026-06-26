@@ -768,6 +768,7 @@ model HallTaskRecord {
   @@index([assignmentId])
   @@index([hallOrgId])
   @@index([recordDate])
+  @@index([recordDate, hallOrgId])
   @@map("hall_task_records")
 }
 
@@ -786,11 +787,28 @@ model HallTaskItemRecord {
   updatedAt       DateTime               @updatedAt @map("updated_at")
   taskRecord      HallTaskRecord         @relation(fields: [taskRecordId], references: [id])
   taskItem        HallTaskItem           @relation(fields: [taskItemId], references: [id])
+  attachments     HallTaskItemAttachment[]
 
   @@unique([taskRecordId, taskItemId])
   @@index([taskRecordId])
   @@index([taskItemId])
   @@map("hall_task_item_records")
+}
+
+/// 厅管日常任务题目附件
+model HallTaskItemAttachment {
+  id                   String             @id @default(uuid())
+  hallTaskItemRecordId String             @map("hall_task_item_record_id")
+  fileName             String             @map("file_name")
+  fileUrl              String             @map("file_url")
+  fileSize             Int                @map("file_size")
+  mimeType             String             @map("mime_type")
+  uploadedBy           String             @map("uploaded_by")
+  createdAt            DateTime           @default(now()) @map("created_at")
+  hallTaskItemRecord   HallTaskItemRecord @relation(fields: [hallTaskItemRecordId], references: [id])
+
+  @@index([hallTaskItemRecordId])
+  @@map("hall_task_item_attachments")
 }
 
 enum HallTaskTemplateStatus {

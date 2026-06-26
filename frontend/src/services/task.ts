@@ -339,6 +339,17 @@ export const notifyApi = {
 // ─── 厅管日常任务独立 API（对接 /api/hall-daily/* 路由） ─────────────────────
 
 // ── 执行层类型 ──
+export type HallTaskItemAttachment = {
+  id: string;
+  hallTaskItemRecordId: string;
+  fileName: string;
+  fileUrl: string;
+  fileSize: number;
+  mimeType: string;
+  uploadedBy: string;
+  createdAt: string;
+};
+
 export type HallTaskItemRecord = {
   id: string;
   taskRecordId: string;
@@ -349,6 +360,7 @@ export type HallTaskItemRecord = {
   isLinkConfirmed: boolean;
   doneAt?: string | null;
   doneBy?: string | null;
+  attachments?: HallTaskItemAttachment[];
 };
 
 export type HallTaskRecord = {
@@ -477,6 +489,16 @@ export const hallDailyApi = {
 
   submitRecord: (id: string) =>
     api.post<HallTaskRecord>(`/hall-daily/my-records/${id}/submit`),
+
+  uploadAttachment: (hallTaskItemRecordId: string, file: File) => {
+    const form = new FormData();
+    form.append("file", file);
+    form.append("hallTaskItemRecordId", hallTaskItemRecordId);
+    return api.postForm<HallTaskItemAttachment>("/tasks/hall-daily/upload", form);
+  },
+
+  deleteAttachment: (id: string) =>
+    api.delete<{ deleted: boolean }>(`/tasks/hall-daily/attachments/${id}`),
 };
 
 export const reportApi = {
@@ -538,6 +560,25 @@ export const reportApi = {
     if (taskDate) params.set("taskDate", taskDate);
     const q = params.toString();
     return api.get<import("../types").HallDailyDashboardResponse>(`/tasks/report/hall-daily-dashboard${q ? `?${q}` : ""}`);
+  },
+  getHallDailyAdminOverview: (params?: { taskDate?: string; scopeOrgId?: string }) => {
+    const qs = new URLSearchParams();
+    if (params?.taskDate) qs.set("taskDate", params.taskDate);
+    if (params?.scopeOrgId) qs.set("scopeOrgId", params.scopeOrgId);
+    const q = qs.toString();
+    return api.get<import("../types").HallDailyAdminOverviewResponse>(`/tasks/report/hall-daily-dashboard/overview${q ? `?${q}` : ""}`);
+  },
+  getHallDailyAdminTeamHalls: (teamOrgId: string, params?: { taskDate?: string }) => {
+    const qs = new URLSearchParams();
+    if (params?.taskDate) qs.set("taskDate", params.taskDate);
+    const q = qs.toString();
+    return api.get<import("../types").HallDailyAdminHallRow[]>(`/tasks/report/hall-daily-dashboard/teams/${encodeURIComponent(teamOrgId)}/halls${q ? `?${q}` : ""}`);
+  },
+  getHallDailyAdminHallDetail: (hallOrgId: string, params?: { taskDate?: string }) => {
+    const qs = new URLSearchParams();
+    if (params?.taskDate) qs.set("taskDate", params.taskDate);
+    const q = qs.toString();
+    return api.get<import("../types").HallDailyAdminHallDetailResponse>(`/tasks/report/hall-daily-dashboard/halls/${encodeURIComponent(hallOrgId)}/detail${q ? `?${q}` : ""}`);
   },
 };
 

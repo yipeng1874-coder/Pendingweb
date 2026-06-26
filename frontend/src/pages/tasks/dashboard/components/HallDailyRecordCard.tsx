@@ -91,6 +91,9 @@ function HallItemRow({
   const [linkConfirmed, setLinkConfirmed] = useState(itemRecord?.isLinkConfirmed ?? false);
   const [uploading, setUploading] = useState(false);
   const [localFiles, setLocalFiles] = useState<Array<{ file: File; previewUrl: string }>>([]);
+  const [uploadedAttachments, setUploadedAttachments] = useState<Array<{ id: string; fileUrl: string; fileName: string }>>(
+    (itemRecord?.attachments ?? []).map((a) => ({ id: a.id, fileUrl: a.fileUrl, fileName: a.fileName }))
+  );
   const [isDragOver, setIsDragOver] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
@@ -128,16 +131,16 @@ function HallItemRow({
   }
 
   function handleFileChange(event: React.ChangeEvent<HTMLInputElement>) {
-    const file = event.target.files?.[0];
-    if (!file) return;
-    if (file.size > 1048576) {
-      alert("图片不得超过 1MB");
-      if (fileRef.current) fileRef.current.value = "";
-      return;
-    }
-    const previewUrl = URL.createObjectURL(file);
-    setLocalFiles((prev) => [...prev, { file, previewUrl }]);
+    const files = Array.from(event.target.files ?? []);
     if (fileRef.current) fileRef.current.value = "";
+    for (const file of files) {
+      if (file.size > 1048576) {
+        alert(`图片 ${file.name} 超过 1MB，已跳过`);
+        continue;
+      }
+      const previewUrl = URL.createObjectURL(file);
+      setLocalFiles((prev) => [...prev, { file, previewUrl }]);
+    }
   }
 
   function handleDrop(e: React.DragEvent<HTMLDivElement>) {
@@ -166,19 +169,40 @@ function HallItemRow({
     if (localFiles.length === 0) return;
     setUploading(true);
     try {
-      // 先标记为 pending（确保 itemRecord 存在）
-      await hallDailyApi.submitItemRecord({ taskRecordId: recordId, taskItemId: item.id, done: false });
-      // 厅管任务附件复用主播同一个上传接口 /tasks/upload，需要通过 taskItemRecordId 上传
-      // 由于上传逻辑需要主播 itemRecord id，这里走后端统一上传口：
-      // 注意：厅管任务的附件上传依赖后端 /tasks/upload，itemRecord 是 HallTaskItemRecord
-      // 暂时提示用户联系开发（待后续扩展专用上传接口）
-      alert("厅管任务的图片上传功能需要独立上传接口支持，敬请期待。");
+      // 优先用已有的 itemRecord id；若不存在才调用接口创建（不改变 done 状态）
+      let hallTaskItemRecordId = itemRecord?.id;
+      if (!hallTaskItemRecordId) {
+        const ir = await hallDailyApi.submitItemRecord({ taskRecordId: recordId, taskItemId: item.id, done: false });
+        hallTaskItemRecordId = ir.id;
+      }
+
+      // 逐张上传
+      const results: Array<{ id: string; fileUrl: string; fileName: string }> = [];
+      for (const { file } of localFiles) {
+        const attachment = await hallDailyApi.uploadAttachment(hallTaskItemRecordId, file);
+        results.push({ id: attachment.id, fileUrl: attachment.fileUrl, fileName: attachment.fileName });
+      }
+
+      // 图片上传完成后把题目标记为已完成
+      await hallDailyApi.submitItemRecord({ taskRecordId: recordId, taskItemId: item.id, done: true });
+
+      setUploadedAttachments((prev) => [...prev, ...results]);
       setLocalFiles([]);
+      onDone();
     } catch (error) {
       console.error(error);
       alert(getErrorMessage(error, "图片上传失败，请稍后重试"));
     } finally {
       setUploading(false);
+    }
+  }
+
+  async function handleDeleteAttachment(id: string) {
+    try {
+      await hallDailyApi.deleteAttachment(id);
+      setUploadedAttachments((prev) => prev.filter((a) => a.id !== id));
+    } catch (error) {
+      alert(getErrorMessage(error, "删除附件失败"));
     }
   }
 
@@ -275,48 +299,77 @@ function HallItemRow({
               )}
               {item.itemType === "ATTACHMENT" && (
                 <div className="space-y-2">
-                  <div
-                    className={`flex flex-wrap gap-2 rounded-lg border-2 border-dashed p-2 transition ${isDragOver ? "border-teal-400 bg-teal-50" : "border-slate-200"}`}
-                    onDragOver={(e) => { e.preventDefault(); setIsDragOver(true); }}
-                    onDragLeave={() => setIsDragOver(false)}
-                    onDrop={handleDrop}
-                  >
-                    {localFiles.map(({ previewUrl }) => (
-                      <div key={previewUrl} className="relative rounded-lg border border-teal-200 bg-white p-1">
-                        <img src={previewUrl} alt="预览" className="h-16 w-16 rounded object-cover" />
+                  {/* 已上传附件列表 */}
+                  {uploadedAttachments.length > 0 && (
+                    <div className="flex flex-wrap gap-2">
+                      {uploadedAttachments.map((att) => (
+                        <div key={att.id} className="relative rounded-lg border border-emerald-200 bg-white p-1">
+                          <img
+                            src={resolveFileUrl(att.fileUrl)}
+                            alt={att.fileName}
+                            className="h-16 w-16 rounded object-cover cursor-pointer"
+                            onClick={() => window.open(resolveFileUrl(att.fileUrl), "_blank")}
+                          />
+                          {!isDone && (
+                            <button
+                              type="button"
+                              onClick={() => void handleDeleteAttachment(att.id)}
+                              className="absolute -right-1.5 -top-1.5 flex h-5 w-5 items-center justify-center rounded-full bg-red-400 text-white shadow hover:bg-red-500"
+                            >
+                              <X size={10} />
+                            </button>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {/* 待上传预览 + 上传区 */}
+                  {!isDone && (
+                    <>
+                      <div
+                        className={`flex flex-wrap gap-2 rounded-lg border-2 border-dashed p-2 transition ${isDragOver ? "border-teal-400 bg-teal-50" : "border-slate-200"}`}
+                        onDragOver={(e) => { e.preventDefault(); setIsDragOver(true); }}
+                        onDragLeave={() => setIsDragOver(false)}
+                        onDrop={handleDrop}
+                      >
+                        {localFiles.map(({ previewUrl }) => (
+                          <div key={previewUrl} className="relative rounded-lg border border-teal-200 bg-white p-1">
+                            <img src={previewUrl} alt="预览" className="h-16 w-16 rounded object-cover" />
+                            <button
+                              type="button"
+                              onClick={() => removeLocalFile(previewUrl)}
+                              className="absolute -right-1.5 -top-1.5 flex h-5 w-5 items-center justify-center rounded-full bg-slate-500 text-white shadow hover:bg-slate-600"
+                            >
+                              <X size={10} />
+                            </button>
+                          </div>
+                        ))}
                         <button
                           type="button"
-                          onClick={() => removeLocalFile(previewUrl)}
-                          className="absolute -right-1.5 -top-1.5 flex h-5 w-5 items-center justify-center rounded-full bg-slate-500 text-white shadow hover:bg-slate-600"
+                          onClick={() => fileRef.current?.click()}
+                          disabled={uploading}
+                          className="flex h-16 w-16 items-center justify-center rounded-lg border-2 border-dashed border-slate-300 text-slate-400 transition hover:border-teal-400 hover:text-teal-500"
                         >
-                          <X size={10} />
+                          <FileImage size={18} />
                         </button>
+                        {isDragOver && (
+                          <div className="flex flex-1 items-center justify-center text-sm text-teal-400">松开鼠标以添加图片</div>
+                        )}
                       </div>
-                    ))}
-                    <button
-                      type="button"
-                      onClick={() => fileRef.current?.click()}
-                      disabled={uploading}
-                      className="flex h-16 w-16 items-center justify-center rounded-lg border-2 border-dashed border-slate-300 text-slate-400 transition hover:border-teal-400 hover:text-teal-500"
-                    >
-                      <FileImage size={18} />
-                    </button>
-                    {isDragOver && (
-                      <div className="flex flex-1 items-center justify-center text-sm text-teal-400">松开鼠标以添加图片</div>
-                    )}
-                  </div>
-                  <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={handleFileChange} />
-                  <p className="text-xs text-slate-400">支持拖拽或点击上传，JPG / PNG / GIF / WebP，单张 ≤ 1MB</p>
-                  {localFiles.length > 0 && (
-                    <button
-                      type="button"
-                      onClick={() => void handleSubmitAttachments()}
-                      disabled={uploading}
-                      className="inline-flex items-center gap-1.5 rounded-lg bg-teal-500 px-3 py-1.5 text-sm text-white transition hover:bg-teal-600 disabled:opacity-40"
-                    >
-                      {uploading ? <Loader2 size={13} className="animate-spin" /> : <Paperclip size={13} />}
-                      {uploading ? "上传中..." : `提交 ${localFiles.length} 张图片`}
-                    </button>
+                      <input ref={fileRef} type="file" accept="image/*" multiple className="hidden" onChange={handleFileChange} />
+                      <p className="text-xs text-slate-400">支持拖拽或点击上传，JPG / PNG / GIF / WebP，单张 ≤ 1MB</p>
+                      {localFiles.length > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => void handleSubmitAttachments()}
+                          disabled={uploading}
+                          className="inline-flex items-center gap-1.5 rounded-lg bg-teal-500 px-3 py-1.5 text-sm text-white transition hover:bg-teal-600 disabled:opacity-40"
+                        >
+                          {uploading ? <Loader2 size={13} className="animate-spin" /> : <Paperclip size={13} />}
+                          {uploading ? "上传中..." : `提交 ${localFiles.length} 张图片`}
+                        </button>
+                      )}
+                    </>
                   )}
                 </div>
               )}
@@ -331,7 +384,7 @@ function HallItemRow({
                 : null}
               {item.itemType === "FILL_BLANK" ? "已确认完成" : null}
               {item.itemType === "LINK" ? "已完成学习并确认" : null}
-              {item.itemType === "ATTACHMENT" ? "已上传附件" : null}
+              {item.itemType === "ATTACHMENT" ? (uploadedAttachments.length > 0 ? `已上传 ${uploadedAttachments.length} 张图片` : "已上传附件") : null}
             </p>
           )}
         </div>
@@ -348,7 +401,7 @@ interface HallDailyRecordCardProps {
 }
 
 export function HallDailyRecordCard({ record, onRefresh }: HallDailyRecordCardProps) {
-  const [expanded, setExpanded] = useState(true);
+  const [expanded, setExpanded] = useState(false);
   const [submitLoading, setSubmitLoading] = useState(false);
   const [showDoneItems, setShowDoneItems] = useState(false);
   const prevDoneCountRef = useRef(record.doneItems);
@@ -415,13 +468,13 @@ export function HallDailyRecordCard({ record, onRefresh }: HallDailyRecordCardPr
         )}
         {/* 执行组织 */}
         {record.hallOrg?.name && (
-          <span className="shrink-0 rounded-md bg-teal-50 px-1.5 py-0.5 text-xs font-medium text-teal-600">
-            {record.hallOrg.name}
+          <span className="shrink-0 text-base font-bold text-teal-700">
+            厅：{record.hallOrg.name}
           </span>
         )}
         {/* 模板标题 */}
         <p className="min-w-0 flex-1 truncate text-xs font-normal text-slate-400">
-          （{record.assignment?.template?.title ?? "厅管日常任务"}）
+          {record.assignment?.template?.title ?? "厅管日常任务"}
         </p>
         {/* 进度 */}
         {record.totalItems > 0 && (

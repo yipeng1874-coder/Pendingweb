@@ -116,3 +116,78 @@ uploadRoutes.delete(
     return ok(res, { deleted: true });
   }
 );
+
+// ── 厅管日常任务专用图片上传 ──────────────────────────────────────────────────
+
+uploadRoutes.post(
+  "/tasks/hall-daily/upload",
+  permissionRequired("task:record:submit"),
+  (req: any, res: any, next: any) => {
+    upload.single("file")(req, res, (err: any) => {
+      if (err) {
+        if (err.code === "LIMIT_FILE_SIZE") return fail(res, "FILE_TOO_LARGE", "图片不得超过1MB", 400);
+        if (err.message === "MIME_NOT_ALLOWED") return fail(res, "MIME_NOT_ALLOWED", "只支持上传 JPG/PNG/GIF/WebP 格式图片", 400);
+        return fail(res, "UPLOAD_ERROR", "上传失败", 500);
+      }
+      next();
+    });
+  },
+  async (req: any, res: any) => {
+    if (!req.file) return fail(res, "NO_FILE", "请选择要上传的图片", 400);
+    const hallTaskItemRecordId = req.body?.hallTaskItemRecordId;
+    if (!hallTaskItemRecordId) return fail(res, "ITEM_RECORD_REQUIRED", "请提供 hallTaskItemRecordId", 400);
+
+    // 校验 hallTaskItemRecord 归属：必须是当前用户身份所在厅的 record
+    const itemRecord = await prisma.hallTaskItemRecord.findFirst({
+      where: { id: hallTaskItemRecordId },
+      include: {
+        taskRecord: {
+          select: {
+            hallOrgId: true,
+            assignment: {
+              select: {
+                targets: { select: { hallOrgId: true } },
+              },
+            },
+          },
+        },
+      },
+    });
+    if (!itemRecord) {
+      fs.unlinkSync(req.file.path);
+      return fail(res, "ITEM_RECORD_NOT_FOUND", "题目记录不存在", 404);
+    }
+
+    const relPath = req.file.path.replace(/\\/g, "/");
+    const uploadsIdx = relPath.indexOf("uploads/");
+    const fileUrl = "/" + relPath.slice(uploadsIdx);
+
+    const attachment = await prisma.hallTaskItemAttachment.create({
+      data: {
+        hallTaskItemRecordId,
+        fileName: req.file.originalname,
+        fileUrl,
+        fileSize: req.file.size,
+        mimeType: req.file.mimetype,
+        uploadedBy: req.userId,
+      },
+    });
+
+    return ok(res, attachment);
+  }
+);
+
+uploadRoutes.delete(
+  "/tasks/hall-daily/attachments/:id",
+  permissionRequired("task:record:submit"),
+  async (req: any, res: any) => {
+    const attachment = await prisma.hallTaskItemAttachment.findUnique({ where: { id: req.params.id } });
+    if (!attachment) return fail(res, "ATTACHMENT_NOT_FOUND", "附件不存在", 404);
+    if (attachment.uploadedBy !== req.userId) return fail(res, "FORBIDDEN", "无权删除该附件", 403);
+
+    const filePath = path.join(process.cwd(), attachment.fileUrl);
+    if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+    await prisma.hallTaskItemAttachment.delete({ where: { id: req.params.id } });
+    return ok(res, { deleted: true });
+  }
+);

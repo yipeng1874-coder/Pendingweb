@@ -225,7 +225,7 @@ function TaskBoardNavGroup({ collapsed, onExpandRequest }: { collapsed: boolean;
         && (permissions.includes("*") || permissions.includes("task:report:view"));
     }
     if (item.to === "/tasks/dashboard/hall-daily-board") {
-      return Boolean(currentRoleCode && currentRoleCode === "HALL_MANAGER")
+      return Boolean(currentRoleCode && ["DEV_ADMIN", "HQ_ADMIN", "BASE_ADMIN", "TEAM_ADMIN", "HALL_MANAGER"].includes(currentRoleCode))
         && (permissions.includes("*") || permissions.includes("task:report:view"));
     }
     if (item.to === "/tasks/dashboard/temporary-board") {
