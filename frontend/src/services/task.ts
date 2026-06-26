@@ -171,7 +171,7 @@ type TemporaryDraftPayload = {
   subjectOrgType?: "BASE" | "TEAM" | "HALL";
 };
 
-function buildQuery(params?: Record<string, string | number | undefined>) {
+function buildQuery(params?: Record<string, string | number | boolean | undefined>) {
   const query = new URLSearchParams();
   Object.entries(params ?? {}).forEach(([key, value]) => {
     if (value !== undefined && value !== "") query.set(key, String(value));
