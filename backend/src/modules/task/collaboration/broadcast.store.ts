@@ -1,3 +1,4 @@
+import { Prisma } from "@prisma/client";
 import { prisma } from "../../../shared/prisma.js";
 import type { BroadcastAnchorStatus, BroadcastQuestionType as PrismaQuestionType } from "@prisma/client";
 
@@ -420,20 +421,20 @@ export async function saveBroadcastAnswer(
       recordId: rec.id,
       questionId: answer.questionId,
       answerText: answer.answerText ?? null,
-      answerOptions: (answer.answerOptions ?? null) as string[] | null,
+      answerOptions: answer.answerOptions ?? Prisma.JsonNull,
       isLinkConfirmed: answer.isLinkConfirmed ?? null,
-      attachmentUrls: (answer.attachmentUrls ?? null) as string[] | null,
+      attachmentUrls: answer.attachmentUrls ?? Prisma.JsonNull,
     },
     update: {
       answerText: answer.answerText ?? null,
-      answerOptions: (answer.answerOptions ?? null) as string[] | null,
+      answerOptions: answer.answerOptions ?? Prisma.JsonNull,
       isLinkConfirmed: answer.isLinkConfirmed ?? null,
-      attachmentUrls: (answer.attachmentUrls ?? null) as string[] | null,
+      attachmentUrls: answer.attachmentUrls ?? Prisma.JsonNull,
     },
   });
 
   // 激活中
-  let newStatus = rec.status;
+  let newStatus: BroadcastAnchorRecord["status"] = rec.status as BroadcastAnchorRecord["status"];
   if (rec.status === "pending") {
     newStatus = "in_progress";
   }

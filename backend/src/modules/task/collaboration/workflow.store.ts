@@ -1,3 +1,4 @@
+import { Prisma } from "@prisma/client";
 import { prisma } from "../../../shared/prisma.js";
 import type { WorkflowQuestionType as PrismaQuestionType } from "@prisma/client";
 
@@ -246,15 +247,15 @@ export async function submitWorkflowStep(
           stepId,
           questionId: ans.questionId,
           answerText: ans.answerText ?? null,
-          answerOptions: (ans.answerOptions ?? null) as string[] | null,
+          answerOptions: ans.answerOptions ?? Prisma.JsonNull,
           isLinkConfirmed: ans.isLinkConfirmed ?? null,
-          attachmentUrls: (ans.attachmentUrls ?? null) as string[] | null,
+          attachmentUrls: ans.attachmentUrls ?? Prisma.JsonNull,
         },
         update: {
           answerText: ans.answerText ?? null,
-          answerOptions: (ans.answerOptions ?? null) as string[] | null,
+          answerOptions: ans.answerOptions ?? Prisma.JsonNull,
           isLinkConfirmed: ans.isLinkConfirmed ?? null,
-          attachmentUrls: (ans.attachmentUrls ?? null) as string[] | null,
+          attachmentUrls: ans.attachmentUrls ?? Prisma.JsonNull,
         },
       });
     }
@@ -316,15 +317,15 @@ export async function saveStepQuestionAnswer(
       stepId,
       questionId: answer.questionId,
       answerText: answer.answerText ?? null,
-      answerOptions: (answer.answerOptions ?? null) as string[] | null,
+      answerOptions: answer.answerOptions ?? Prisma.JsonNull,
       isLinkConfirmed: answer.isLinkConfirmed ?? null,
-      attachmentUrls: (answer.attachmentUrls ?? null) as string[] | null,
+      attachmentUrls: answer.attachmentUrls ?? Prisma.JsonNull,
     },
     update: {
       answerText: answer.answerText ?? null,
-      answerOptions: (answer.answerOptions ?? null) as string[] | null,
+      answerOptions: answer.answerOptions ?? Prisma.JsonNull,
       isLinkConfirmed: answer.isLinkConfirmed ?? null,
-      attachmentUrls: (answer.attachmentUrls ?? null) as string[] | null,
+      attachmentUrls: answer.attachmentUrls ?? Prisma.JsonNull,
     },
   });
 
