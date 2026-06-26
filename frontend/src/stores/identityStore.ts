@@ -5,6 +5,8 @@ import type { Identity } from "../types";
 interface IdentityState {
   currentIdentity?: Identity;
   permissions: string[];
+  /** 每次切换身份时递增，用于触发各页面的数据刷新 */
+  identityVersion: number;
   setIdentity: (identity: Identity) => void;
   setPermissions: (permissions: string[]) => void;
 }
@@ -13,7 +15,8 @@ export const useIdentityStore = create<IdentityState>()(
   persist(
     (set) => ({
       permissions: [],
-      setIdentity: (identity) => set({ currentIdentity: identity }),
+      identityVersion: 0,
+      setIdentity: (identity) => set((state) => ({ currentIdentity: identity, identityVersion: state.identityVersion + 1 })),
       setPermissions: (permissions) => set({ permissions }),
     }),
     {

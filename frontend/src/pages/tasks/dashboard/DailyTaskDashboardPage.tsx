@@ -380,6 +380,7 @@ function NodeSummary({ node, children = [], level = 0, taskDate, scopeOrgId, def
 
 export function DailyTaskDashboardPage() {
   const currentIdentity = useIdentityStore((state) => state.currentIdentity);
+  const identityVersion = useIdentityStore((state) => state.identityVersion);
   const [orgs, setOrgs] = useState<OrgUnit[]>([]);
   const [taskDate, setTaskDate] = useState("");
   const [selectedBaseOrgId, setSelectedBaseOrgId] = useState("");
@@ -424,7 +425,9 @@ export function DailyTaskDashboardPage() {
 
   useEffect(() => {
     void load();
-  }, []);
+    // identityVersion 变化时（切换身份）自动重新加载数据
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [identityVersion]);
 
   useEffect(() => {
     if (!availableBaseOrgs.length || selectedBaseOrgId || !baseSelectionRequired) return;

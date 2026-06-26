@@ -21,10 +21,7 @@ export function IdentitySwitcher() {
       value={current?.id ?? ""}
       onChange={(event) => {
         const next = identities.find((item) => item.id === event.target.value);
-        if (next) {
-          setIdentity(next);
-          window.location.reload();
-        }
+        if (next) setIdentity(next);
       }}
     >
       {identities.map((identity) => (
