@@ -520,12 +520,20 @@ export function DailyTaskDashboardPage() {
             <input
               type="date"
               value={taskDate}
-              onChange={(event) => setTaskDate(event.target.value)}
+              onChange={(event) => {
+                const newDate = event.target.value;
+                setTaskDate(newDate);
+                if (newDate) void load(newDate, selectedBaseOrgId || undefined);
+              }}
               className="h-11 min-w-[210px] rounded-2xl border border-slate-200 bg-white px-4 text-sm text-slate-700 outline-none transition focus:border-blue-400"
             />
             <select
               value={selectedBaseOrgId}
-              onChange={(event) => setSelectedBaseOrgId(event.target.value)}
+              onChange={(event) => {
+                const newId = event.target.value;
+                setSelectedBaseOrgId(newId);
+                void load(taskDate || undefined, newId || undefined);
+              }}
               disabled={!baseSelectionRequired}
               className="h-11 min-w-[240px] rounded-2xl border border-slate-200 bg-white px-4 text-sm text-slate-700 outline-none transition focus:border-blue-400 disabled:bg-slate-50 disabled:text-slate-400"
             >
