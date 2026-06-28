@@ -1245,6 +1245,7 @@ export function TemporaryIssuePanel({
             {mode === "ACCOUNT" ? (
               <AccountTargetSelector
                 scopeOrgId={managementOrgId}
+                currentOrgId={currentOrgId}
                 orgs={orgs}
                 managementScopePath={managementScopePath}
                 selectedAccounts={selectedAccounts}

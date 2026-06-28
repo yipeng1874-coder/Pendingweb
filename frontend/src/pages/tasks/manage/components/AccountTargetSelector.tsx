@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Building2, ChevronDown, ChevronRight, Loader2, Search, UserPlus, X } from "lucide-react";
 
 import { accountApi } from "../../../../features/accounts/api";
@@ -11,6 +11,7 @@ import { collectDescendantIds } from "../../../../shared/utils/orgTree";
 
 type Props = {
   scopeOrgId?: string;
+  currentOrgId?: string;
   orgs: OrgUnit[];
   managementScopePath?: string;
   selectedAccounts: SearchAccount[];
@@ -56,6 +57,7 @@ function getAncestorIds(orgId: string, orgMap: Map<string, OrgUnit>) {
 
 export function AccountTargetSelector({
   scopeOrgId,
+  currentOrgId,
   orgs,
   managementScopePath,
   selectedAccounts,
@@ -69,6 +71,7 @@ export function AccountTargetSelector({
   const [loading, setLoading] = useState(false);
   const [results, setResults] = useState<SearchAccount[]>([]);
   const [expandedOrgIds, setExpandedOrgIds] = useState<string[]>([]);
+  const [searchScopeOrgId, setSearchScopeOrgId] = useState(scopeOrgId ?? "");
 
   const selectedIdSet = useMemo(() => new Set(selectedAccounts.map((a) => a.id)), [selectedAccounts]);
   const selectionSet = useMemo(() => new Set(selectedOrgIds), [selectedOrgIds]);
@@ -104,6 +107,26 @@ export function AccountTargetSelector({
     () => selectedOrgIds.map((id) => orgMap.get(id)).filter(Boolean) as OrgUnit[],
     [selectedOrgIds, orgMap]
   );
+  const searchableScopeOptions = useMemo(
+    () => targetOrgRows
+      .map((row) => row.org)
+      .filter((org) => org.orgType === "BASE" || org.orgType === "TEAM" || org.orgType === "HALL"),
+    [targetOrgRows]
+  );
+  const defaultSearchScopeOrgId = useMemo(() => {
+    if (currentOrgId) {
+      const currentOrg = orgMap.get(currentOrgId);
+      if (currentOrg && searchableScopeOptions.some((org) => org.id === currentOrg.id)) return currentOrg.id;
+      const parentOrg = currentOrg?.parentId ? orgMap.get(currentOrg.parentId) : null;
+      if (parentOrg && searchableScopeOptions.some((org) => org.id === parentOrg.id)) return parentOrg.id;
+    }
+    if (scopeOrgId && searchableScopeOptions.some((org) => org.id === scopeOrgId)) return scopeOrgId;
+    return searchableScopeOptions[0]?.id ?? "";
+  }, [currentOrgId, orgMap, scopeOrgId, searchableScopeOptions]);
+
+  useEffect(() => {
+    setSearchScopeOrgId(defaultSearchScopeOrgId);
+  }, [defaultSearchScopeOrgId]);
 
   async function doSearch() {
     const searchText = keyword.trim();
@@ -112,7 +135,7 @@ export function AccountTargetSelector({
       return;
     }
     setLoading(true);
-    const next = await accountApi.searchAccounts(searchText, { scopeOrgId }).catch(() => [] as SearchAccount[]);
+    const next = await accountApi.searchAccounts(searchText, { scopeOrgId: searchScopeOrgId || scopeOrgId }).catch(() => [] as SearchAccount[]);
     setLoading(false);
     setResults(next);
   }
@@ -195,25 +218,27 @@ export function AccountTargetSelector({
         {/* 搜索添加 Tab */}
         {tab === "search" && (
           <div className="flex flex-col flex-1">
-            <div className="flex gap-2 border-b border-slate-100 p-3">
-              <div className="relative flex-1">
-                <Search size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-                <input
-                  value={keyword}
-                  onChange={(e) => setKeyword(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === "Enter") void doSearch(); }}
-                  className="w-full rounded-xl border border-slate-200 bg-slate-50 px-9 py-2 text-sm focus:border-blue-400 focus:outline-none focus:bg-white"
-                  placeholder="手机号、昵称或抖音号"
-                />
+            <div className="border-b border-slate-100 p-3">
+              <div className="flex gap-2">
+                <div className="relative flex-1">
+                  <Search size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                  <input
+                    value={keyword}
+                    onChange={(e) => setKeyword(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === "Enter") void doSearch(); }}
+                    className="w-full rounded-xl border border-slate-200 bg-slate-50 px-9 py-2 text-sm focus:border-blue-400 focus:outline-none focus:bg-white"
+                    placeholder="手机号、昵称或抖音号"
+                  />
+                </div>
+                <button
+                  type="button"
+                  onClick={() => void doSearch()}
+                  disabled={loading}
+                  className="rounded-xl bg-blue-500 px-3 py-2 text-xs font-medium text-white transition hover:bg-blue-600 disabled:opacity-50"
+                >
+                  {loading ? <Loader2 size={13} className="animate-spin" /> : "搜索"}
+                </button>
               </div>
-              <button
-                type="button"
-                onClick={() => void doSearch()}
-                disabled={loading}
-                className="rounded-xl bg-blue-500 px-3 py-2 text-xs font-medium text-white transition hover:bg-blue-600 disabled:opacity-50"
-              >
-                {loading ? <Loader2 size={13} className="animate-spin" /> : "搜索"}
-              </button>
             </div>
             <div className="max-h-[340px] space-y-2 overflow-y-auto p-3">
               {!keyword.trim() ? (
