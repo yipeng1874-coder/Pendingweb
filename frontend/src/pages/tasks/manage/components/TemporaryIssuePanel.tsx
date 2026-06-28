@@ -2003,7 +2003,7 @@ export function TemporaryIssuePanel({
                   </div>
                   <div className="mt-3 max-h-56 space-y-3 overflow-y-auto pr-1">
                     {totalExcludedCount === 0 ? (
-                      <div className="rounded-2xl border border-dashed border-amber-200 bg-amber-50 px-4 py-6 text-center text-sm text-amber-700">当前没有排除名单，将覆盖当前范围内全部主播。</div>
+                      <div className="rounded-2xl border border-dashed border-amber-200 bg-amber-50 px-4 py-6 text-center text-sm text-amber-700">当前没有排除名单，当前范围内主播将默认全部参与任务。</div>
                     ) : (
                       <>
                         {excludedOrgSections.map((section) => (

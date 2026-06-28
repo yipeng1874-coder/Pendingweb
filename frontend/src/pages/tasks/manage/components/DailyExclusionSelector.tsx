@@ -40,6 +40,8 @@ type ExcludedAnchorRow = ExcludedAnchorMeta & {
   hallLabel: string;
 };
 
+type OrgParticipationState = "included" | "partial" | "excluded";
+
 function collectDefaultCollapsedIds(nodes: OrgNode[]) {
   const ids: string[] = [];
   const walk = (rows: OrgNode[]) => {
@@ -103,6 +105,34 @@ function createExcludedAnchorRows(excludedAnchorProfileIds: string[], knownAncho
     .sort((left, right) => left.hallLabel.localeCompare(right.hallLabel) || left.nickname.localeCompare(right.nickname));
 }
 
+function createOrgParticipationResolver(params: {
+  orgMap: Map<string, OrgUnit>;
+  excludedOrgIds: string[];
+  excludedAnchorRows: ExcludedAnchorRow[];
+}) {
+  const excludedOrgIdSet = new Set(params.excludedOrgIds);
+  const excludedAnchorHallIds = new Set(params.excludedAnchorRows.map((anchor) => anchor.hallOrgId).filter(Boolean) as string[]);
+
+  return function resolveOrgParticipation(org: OrgUnit): OrgParticipationState {
+    if (excludedOrgIdSet.has(org.id)) return "excluded";
+
+    const hasExcludedChildOrg = params.excludedOrgIds.some((excludedOrgId) => {
+      const excludedOrg = params.orgMap.get(excludedOrgId);
+      if (!excludedOrg || excludedOrg.id === org.id) return false;
+      return excludedOrg.path.startsWith(`${org.path}/`);
+    });
+
+    const hasExcludedAnchor = Array.from(excludedAnchorHallIds).some((hallOrgId) => {
+      const hallOrg = params.orgMap.get(hallOrgId);
+      if (!hallOrg) return false;
+      return hallOrg.id === org.id || hallOrg.path.startsWith(`${org.path}/`);
+    });
+
+    if (hasExcludedChildOrg || hasExcludedAnchor) return "partial";
+    return "included";
+  };
+}
+
 export function DailyExclusionSelector({
   orgs,
   scopePath,
@@ -156,6 +186,10 @@ export function DailyExclusionSelector({
   const excludedAnchorRows = useMemo(
     () => createExcludedAnchorRows(excludedAnchorProfileIds, knownAnchors, orgMap),
     [excludedAnchorProfileIds, knownAnchors, orgMap]
+  );
+  const resolveOrgParticipation = useMemo(
+    () => createOrgParticipationResolver({ orgMap, excludedOrgIds, excludedAnchorRows }),
+    [orgMap, excludedOrgIds, excludedAnchorRows]
   );
   const cachedHallAnchors = expandedHallId ? hallAnchorCache[expandedHallId] : undefined;
 
@@ -313,6 +347,12 @@ export function DailyExclusionSelector({
   function renderOrgNodes(nodes: OrgNode[]) {
     return nodes.map((org) => {
       const active = excludedOrgIds.includes(org.id);
+      const participation = resolveOrgParticipation(org as OrgUnit);
+      const participationMeta = participation === "excluded"
+        ? { label: "已排除", badge: "bg-red-50 text-red-600" }
+        : participation === "partial"
+          ? { label: "部分排除", badge: "bg-amber-50 text-amber-700" }
+          : { label: "√已参与", badge: "bg-emerald-50 text-emerald-700" };
       const hasChildren = org.children.length > 0;
       const isHall = enableAnchorExclusion && org.orgType === "HALL";
       const hallExpanded = isHall && expandedHallId === org.id;
@@ -346,6 +386,9 @@ export function DailyExclusionSelector({
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="truncate text-sm font-medium text-slate-900">{org.name}</span>
                   <span className="truncate text-[11px] text-slate-400">{org.orgCode}</span>
+                  <span className={`inline-flex rounded-full px-2 py-0.5 text-[11px] font-medium ${participationMeta.badge}`}>
+                    {participationMeta.label}
+                  </span>
                 </div>
               </div>
             </button>
