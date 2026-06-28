@@ -249,6 +249,7 @@ export function TaskDashboardPage() {
   const [activeRecordId, setActiveRecordId] = useState<string | null>(null);
   const [dailyRecordView, setDailyRecordView] = useState<"today" | "overdue">("today");
   const [hallDailyRecordView, setHallDailyRecordView] = useState<"today" | "overdue">("today");
+  const [expandedHallDailyIds, setExpandedHallDailyIds] = useState<Set<string>>(new Set());
   const [showReminderModal, setShowReminderModal] = useState(false);
   const [reminderForm, setReminderForm] = useState<ReminderFormState>(defaultReminderForm());
   const [savingReminder, setSavingReminder] = useState(false);
@@ -279,6 +280,14 @@ export function TaskDashboardPage() {
     setBroadcastTasks(broadcastRows);
     setHallDailyRecords(hallDailyRows);
     setLoading(false);
+  }
+
+  // 仅刷新厅管日常任务数据，不触发全局 loading，避免卡片展开状态丢失
+  async function refreshHallDailyOnly() {
+    const shouldFetchHallDaily = currentIdentity?.roleCode === "HALL_MANAGER" || currentIdentity?.roleCode === "ANCHOR";
+    if (!shouldFetchHallDaily) return;
+    const hallDailyRows = await hallDailyApi.getMyRecords().catch(() => [] as HallTaskRecord[]);
+    setHallDailyRecords(hallDailyRows);
   }
 
   useEffect(() => {
@@ -505,7 +514,15 @@ export function TaskDashboardPage() {
                 <HallDailyRecordCard
                   key={record.id}
                   record={record}
-                  onRefresh={load}
+                  expanded={expandedHallDailyIds.has(record.id)}
+                  onToggle={() =>
+                    setExpandedHallDailyIds((prev) => {
+                      const next = new Set(prev);
+                      next.has(record.id) ? next.delete(record.id) : next.add(record.id);
+                      return next;
+                    })
+                  }
+                  onRefresh={refreshHallDailyOnly}
                 />
               ))}
             </TaskDashboardSection>

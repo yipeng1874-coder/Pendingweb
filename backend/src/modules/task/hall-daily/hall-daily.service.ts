@@ -873,14 +873,21 @@ export const HallDailyRecordService = {
     const doneCount = await prisma.hallTaskItemRecord.count({
       where: { taskRecordId: data.taskRecordId, status: "done" },
     });
-    const newRecordStatus = isDailyRecordOverdue(record.recordDate, now)
-      ? "overdue"
-      : doneCount > 0
-        ? "in_progress"
-        : "pending";
+    const allDone = record.totalItems > 0 && doneCount >= record.totalItems;
+    const newRecordStatus = allDone
+      ? "submitted"
+      : isDailyRecordOverdue(record.recordDate, now)
+        ? "overdue"
+        : doneCount > 0
+          ? "in_progress"
+          : "pending";
     await prisma.hallTaskRecord.update({
       where: { id: data.taskRecordId },
-      data: { doneItems: doneCount, status: newRecordStatus as any },
+      data: {
+        doneItems: doneCount,
+        status: newRecordStatus as any,
+        ...(allDone ? { submittedAt: now } : {}),
+      },
     });
 
     return itemRecord;

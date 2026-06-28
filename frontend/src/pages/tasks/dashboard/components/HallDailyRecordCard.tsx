@@ -82,7 +82,7 @@ function HallItemRow({
   item: ItemType;
   itemRecord?: HallTaskItemRecord;
   recordId: string;
-  onDone: () => void;
+  onDone: (updated: HallTaskItemRecord) => void;
   index?: number;
 }) {
   const [loading, setLoading] = useState(false);
@@ -113,7 +113,7 @@ function HallItemRow({
     if (loading) return;
     setLoading(true);
     try {
-      await hallDailyApi.submitItemRecord({
+      const updated = await hallDailyApi.submitItemRecord({
         taskRecordId: recordId,
         taskItemId: item.id,
         answerText: extra?.answerText ?? (answerText || undefined),
@@ -121,7 +121,7 @@ function HallItemRow({
         isLinkConfirmed: extra?.isLinkConfirmed ?? linkConfirmed,
         done,
       });
-      onDone();
+      onDone(updated);
     } catch (error) {
       console.error(error);
       alert(getErrorMessage(error, "保存失败，请稍后重试"));
@@ -184,11 +184,11 @@ function HallItemRow({
       }
 
       // 图片上传完成后把题目标记为已完成
-      await hallDailyApi.submitItemRecord({ taskRecordId: recordId, taskItemId: item.id, done: true });
+      const updated = await hallDailyApi.submitItemRecord({ taskRecordId: recordId, taskItemId: item.id, done: true });
 
       setUploadedAttachments((prev) => [...prev, ...results]);
       setLocalFiles([]);
-      onDone();
+      onDone(updated);
     } catch (error) {
       console.error(error);
       alert(getErrorMessage(error, "图片上传失败，请稍后重试"));
@@ -397,17 +397,35 @@ function HallItemRow({
 
 interface HallDailyRecordCardProps {
   record: HallTaskRecord;
+  expanded: boolean;
+  onToggle: () => void;
   onRefresh: () => void;
 }
 
-export function HallDailyRecordCard({ record, onRefresh }: HallDailyRecordCardProps) {
-  const [expanded, setExpanded] = useState(false);
-  const [submitLoading, setSubmitLoading] = useState(false);
+export function HallDailyRecordCard({ record, expanded, onToggle, onRefresh }: HallDailyRecordCardProps) {
   const [showDoneItems, setShowDoneItems] = useState(false);
-  const prevDoneCountRef = useRef(record.doneItems);
+  // 本地维护 itemRecords，子任务完成后直接本地更新，避免触发父组件刷新导致展开状态丢失
+  const [localItemRecords, setLocalItemRecords] = useState<HallTaskItemRecord[]>(record.itemRecords ?? []);
+  const [recordStatus, setRecordStatus] = useState(record.status);
+  const [submitting, setSubmitting] = useState(false);
+  const submittingRef = useRef(false); // 同步守门，防止并发重复提交
+
+  // 当父组件传入的 record 变化时同步本地状态
+  const prevRecordIdRef = useRef(record.id);
+  useEffect(() => {
+    if (prevRecordIdRef.current !== record.id) {
+      // record 切换（不同任务），完整重置
+      prevRecordIdRef.current = record.id;
+      setLocalItemRecords(record.itemRecords ?? []);
+      setRecordStatus(record.status);
+    } else {
+      // 同一任务刷新：只同步 status（itemRecords 保持本地最新，避免倒退）
+      setRecordStatus(record.status);
+    }
+  }, [record.id, record.itemRecords, record.status]);
 
   const items = record.assignment?.template?.items ?? [];
-  const itemRecordsMap = new Map((record.itemRecords ?? []).map((ir) => [ir.taskItemId, ir]));
+  const itemRecordsMap = new Map(localItemRecords.map((ir) => [ir.taskItemId, ir]));
 
   const pendingItems = items.filter((item) => itemRecordsMap.get(item.id)?.status !== "done");
   const doneItems = items.filter((item) => itemRecordsMap.get(item.id)?.status === "done");
@@ -415,16 +433,16 @@ export function HallDailyRecordCard({ record, onRefresh }: HallDailyRecordCardPr
   const incompleteRequired = items.filter(
     (item) => item.isRequired && itemRecordsMap.get(item.id)?.status !== "done"
   );
-  const canSubmit = record.status !== "submitted" && incompleteRequired.length === 0 && items.length > 0;
 
-  const status = statusLabel(record.status);
-  const isOverdue = record.status === "overdue";
-  const isSubmitted = record.status === "submitted";
+  const status = statusLabel(recordStatus);
+  const isOverdue = recordStatus === "overdue";
+  const isSubmitted = recordStatus === "submitted";
   const leftBorderColor = isOverdue ? "border-l-red-400" : isSubmitted ? "border-l-emerald-400" : "border-l-teal-400";
 
   const dateLabel = formatRecordDate(record.recordDate);
   const supplementDateLabel = record.recordDate ? formatRecordDate(addDays(record.recordDate, 1)) : "";
 
+  const prevDoneCountRef = useRef(doneItems.length);
   useEffect(() => {
     if (!expanded) return;
     if (pendingItems.length === 0 && doneItems.length > 0) {
@@ -435,16 +453,64 @@ export function HallDailyRecordCard({ record, onRefresh }: HallDailyRecordCardPr
     prevDoneCountRef.current = doneItems.length;
   }, [doneItems.length, expanded, pendingItems.length]);
 
-  async function handleSubmit() {
-    setSubmitLoading(true);
+  // 组件加载时：若所有必填项已完成但记录仍为 in_progress，自动提交
+  const autoSubmitCalledRef = useRef(false);
+  useEffect(() => {
+    if (autoSubmitCalledRef.current) return;
+    if (recordStatus !== "in_progress" && recordStatus !== "overdue") return;
+    const currentItems = record.assignment?.template?.items ?? [];
+    if (currentItems.length === 0) return;
+    const requiredItems = currentItems.filter((item) => item.isRequired);
+    if (requiredItems.length === 0) return;
+    const irMap = new Map((record.itemRecords ?? []).map((ir) => [ir.taskItemId, ir]));
+    const allDone = requiredItems.every((item) => irMap.get(item.id)?.status === "done");
+    if (allDone) {
+      autoSubmitCalledRef.current = true;
+      void handleSubmitRecord();
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [record.id]);
+
+  // 子任务完成后本地更新；若全部必填项完成则自动调用后端提交
+  function handleItemDone(taskItemId: string, updatedItemRecord: HallTaskItemRecord) {
+    const currentItems = record.assignment?.template?.items ?? [];
+    let shouldSubmit = false;
+    setLocalItemRecords((prev) => {
+      const exists = prev.some((ir) => ir.taskItemId === taskItemId);
+      const next = exists
+        ? prev.map((ir) => ir.taskItemId === taskItemId ? updatedItemRecord : ir)
+        : [...prev, updatedItemRecord];
+
+      const nextMap = new Map(next.map((ir) => [ir.taskItemId, ir]));
+      const allRequiredDone =
+        currentItems.length > 0 &&
+        currentItems.filter((item) => item.isRequired).every((item) => nextMap.get(item.id)?.status === "done");
+
+      if (allRequiredDone) {
+        shouldSubmit = true;
+      }
+      return next;
+    });
+    // 在 setState 回调外触发提交，避免副作用在 render 阶段执行
+    if (shouldSubmit) {
+      void handleSubmitRecord();
+    }
+  }
+
+  // 整体提交记录，调用后端接口
+  async function handleSubmitRecord() {
+    if (submittingRef.current) return;
+    submittingRef.current = true;
+    setSubmitting(true);
     try {
       await hallDailyApi.submitRecord(record.id);
-      onRefresh();
+      setRecordStatus("submitted");
+      setTimeout(() => onRefresh(), 300);
     } catch (error) {
-      console.error(error);
-      alert(getErrorMessage(error, isOverdue ? "补录提交失败，请稍后重试" : "任务提交失败，请稍后重试"));
+      alert(getErrorMessage(error, "提交失败，请稍后重试"));
     } finally {
-      setSubmitLoading(false);
+      submittingRef.current = false;
+      setSubmitting(false);
     }
   }
 
@@ -454,7 +520,7 @@ export function HallDailyRecordCard({ record, onRefresh }: HallDailyRecordCardPr
       <button
         type="button"
         className="flex w-full items-center gap-2.5 p-3 text-left transition hover:bg-slate-50"
-        onClick={() => setExpanded((v) => !v)}
+        onClick={onToggle}
       >
         {/* 日期 */}
         <span className={`flex shrink-0 items-center gap-1 text-sm font-medium ${isOverdue ? "text-red-500" : "text-slate-500"}`}>
@@ -476,9 +542,9 @@ export function HallDailyRecordCard({ record, onRefresh }: HallDailyRecordCardPr
         <p className="min-w-0 flex-1 truncate text-xs font-normal text-slate-400">
           {record.assignment?.template?.title ?? "厅管日常任务"}
         </p>
-        {/* 进度 */}
-        {record.totalItems > 0 && (
-          <span className="shrink-0 text-sm text-slate-400">{record.doneItems}/{record.totalItems}</span>
+        {/* 进度（用本地计算值，实时反映已完成子任务数量） */}
+        {items.length > 0 && (
+          <span className="shrink-0 text-sm text-slate-400">{doneItems.length}/{items.length}</span>
         )}
         {/* 状态胶囊 */}
         <span className={`shrink-0 rounded-full px-2 py-0.5 text-xs font-medium ${status.cls}`}>{status.text}</span>
@@ -515,7 +581,7 @@ export function HallDailyRecordCard({ record, onRefresh }: HallDailyRecordCardPr
                       item={item}
                       itemRecord={itemRecordsMap.get(item.id)}
                       recordId={record.id}
-                      onDone={onRefresh}
+                      onDone={(updated) => handleItemDone(item.id, updated)}
                       index={items.indexOf(item) + 1}
                     />
                   ))}
@@ -543,7 +609,7 @@ export function HallDailyRecordCard({ record, onRefresh }: HallDailyRecordCardPr
                           item={item}
                           itemRecord={itemRecordsMap.get(item.id)}
                           recordId={record.id}
-                          onDone={onRefresh}
+                          onDone={(updated) => handleItemDone(item.id, updated)}
                           index={items.indexOf(item) + 1}
                         />
                       ))}
@@ -557,21 +623,16 @@ export function HallDailyRecordCard({ record, onRefresh }: HallDailyRecordCardPr
           {/* 必填项提示 */}
           {!isSubmitted && incompleteRequired.length > 0 && (
             <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-700">
-              还有 {incompleteRequired.length} 项必填子任务未完成，暂不可提交厅管日常任务。
+              还有 {incompleteRequired.length} 项必填子任务未完成。
             </div>
           )}
 
-          {/* 提交按钮 */}
-          {canSubmit && (
-            <button
-              type="button"
-              onClick={() => void handleSubmit()}
-              disabled={submitLoading}
-              className={`flex w-full items-center justify-center gap-2 rounded-xl py-2.5 text-sm font-medium text-white transition disabled:opacity-40 ${isOverdue ? "bg-red-500 hover:bg-red-600" : "bg-teal-500 hover:bg-teal-600"}`}
-            >
-              {submitLoading ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
-              {isOverdue ? "提交补录" : "提交任务"}
-            </button>
+          {/* 自动提交中提示 */}
+          {!isSubmitted && submitting && (
+            <div className="flex items-center justify-center gap-2 rounded-2xl bg-teal-50 py-3 text-sm text-teal-600">
+              <Loader2 size={15} className="animate-spin" />
+              正在自动提交...
+            </div>
           )}
         </div>
       )}
