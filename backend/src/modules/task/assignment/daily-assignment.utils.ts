@@ -70,6 +70,7 @@ export type AssignmentAudienceMember = {
 };
 
 type AssignmentAudienceInput = {
+  id: string;
   targetRoleType: string;
   targetAdminLevels?: unknown;
   targets: Array<{ orgPathSnapshot: string }>;
@@ -154,7 +155,7 @@ export async function listAssignmentAudienceMembers(db: any, assignment: Assignm
   // ── 历史日期补充：迁移主播的 disabled 身份 ──────────────────────────
   const isHistorical = taskDate && taskDate < formatBeijingDate(new Date());
   if (isHistorical && assignment.targetRoleType === "ANCHOR") {
-    const supplement = await supplementMigratedAnchorAudience(db, assignment, taskDate!);
+    const supplement = await supplementMigratedAnchorAudience(db, assignment.id, assignment.targets, taskDate!);
     for (const member of supplement) {
       if (seenIdentityIds.has(member.id)) continue;
       if (isAssignmentOrgExcluded(member.scopePath ?? undefined, assignment.exclusions ?? [])) continue;
@@ -177,12 +178,13 @@ export async function listAssignmentAudienceMembers(db: any, assignment: Assignm
 // 多次迁移去重：同 userId+taskDate 按 expiredAt ASC 保留最早（当天最初所在厅）
 async function supplementMigratedAnchorAudience(
   db: any,
-  assignment: { id: string; targets: Array<{ orgPathSnapshot: string }> },
+  assignmentId: string,
+  targets: Array<{ orgPathSnapshot: string }>,
   taskDate: string
 ): Promise<AssignmentAudienceMember[]> {
   const allMembers: AssignmentAudienceMember[] = [];
 
-  for (const target of assignment.targets ?? []) {
+  for (const target of targets ?? []) {
     const identities = await db.userIdentity.findMany({
       where: {
         status: "disabled",
@@ -205,7 +207,7 @@ async function supplementMigratedAnchorAudience(
         visibleTaskRecordLinks: {
           some: {
             taskRecord: {
-              assignmentId: assignment.id,
+              assignmentId: assignmentId,
               recordDate: taskDate,
             },
           },
