@@ -1,4 +1,4 @@
-import { ChevronDown, ChevronRight } from "lucide-react";
+import { ChevronDown, ChevronRight, AlertCircle, PauseCircle } from "lucide-react";
 import type { OrgNode } from "../../utils/orgTree";
 
 const orgTypeMeta = {
@@ -14,9 +14,19 @@ type OrgTreeProps = {
   onSelect: (orgId: string) => void;
   collapsedIds?: Set<string>;
   onToggleCollapse?: (orgId: string) => void;
+  showOnlyPaused?: boolean;
+  pausedDescendantIds?: Set<string>;
 };
 
-export function OrgTree({ nodes, selectedOrgId, onSelect, collapsedIds = new Set(), onToggleCollapse }: OrgTreeProps) {
+export function OrgTree({
+  nodes,
+  selectedOrgId,
+  onSelect,
+  collapsedIds = new Set(),
+  onToggleCollapse,
+  showOnlyPaused = false,
+  pausedDescendantIds = new Set(),
+}: OrgTreeProps) {
   const hasChildren = (node: OrgNode) => node.children.length > 0 || Boolean(node.hasChildren);
   const toggleCollapse = onToggleCollapse ?? (() => undefined);
 
@@ -24,8 +34,37 @@ export function OrgTree({ nodes, selectedOrgId, onSelect, collapsedIds = new Set
     <div className="space-y-2.5">
       {nodes.map((node) => {
         const meta = orgTypeMeta[node.orgType];
+        const isPaused = node.status === "paused";
+        const isManualPause = isPaused && !node.pausedByCascade;
+        const isCascadePause = isPaused && node.pausedByCascade;
+        // 只在"只看暂停"模式下，active 祖先显示 ⚠
+        const hasPausedDescendant = showOnlyPaused && !isPaused && pausedDescendantIds.has(node.id);
+        const isSelected = selectedOrgId === node.id;
+
         const expandable = hasChildren(node);
         const collapsed = collapsedIds.has(node.id);
+
+        const badgeStyle = isPaused
+          ? isCascadePause
+            ? "bg-slate-50 text-slate-300"
+            : "bg-slate-100 text-slate-400"
+          : meta.badge;
+
+        let textColorClass = "";
+        if (isManualPause) textColorClass = "text-slate-400 line-through";
+        else if (isCascadePause) textColorClass = "text-slate-300 line-through";
+        else if (isSelected) textColorClass = "text-[#4C72FF]";
+        else textColorClass = meta.text;
+
+        const containerClass = isPaused
+          ? `flex min-w-0 flex-1 items-center gap-2 rounded-[18px] border px-3.5 py-3 text-left transition-all duration-200 ${
+              isSelected ? "border-slate-200 bg-slate-50" : "border-transparent bg-white/60 hover:bg-slate-50"
+            }`
+          : `flex min-w-0 flex-1 items-center gap-2 rounded-[18px] border px-3.5 py-3 text-left transition-all duration-200 ${
+              isSelected
+                ? "border-[#B9CBFF] bg-[#EEF4FF] text-[#4C72FF] shadow-[0_10px_24px_rgba(76,114,255,0.08)]"
+                : "border-transparent bg-white text-slate-700 shadow-[0_4px_14px_rgba(15,23,42,0.03)] hover:border-slate-100 hover:bg-slate-50 hover:shadow-[0_8px_18px_rgba(15,23,42,0.05)]"
+            }`;
 
         return (
           <div key={node.id}>
@@ -36,16 +75,42 @@ export function OrgTree({ nodes, selectedOrgId, onSelect, collapsedIds = new Set
                 disabled={!expandable || !onToggleCollapse}
                 onClick={() => toggleCollapse(node.id)}
               >
-                {expandable ? collapsed ? <ChevronRight size={16} /> : <ChevronDown size={16} /> : <span className="h-1.5 w-1.5 rounded-full bg-slate-300" />}
+                {expandable ? (
+                  collapsed ? (
+                    <ChevronRight size={16} />
+                  ) : (
+                    <ChevronDown size={16} />
+                  )
+                ) : (
+                  <span className="h-1.5 w-1.5 rounded-full bg-slate-300" />
+                )}
               </button>
-              <button
-                type="button"
-                onClick={() => onSelect(node.id)}
-                className={`flex min-w-0 flex-1 items-center gap-2 rounded-[18px] border px-3.5 py-3 text-left transition-all duration-200 ${selectedOrgId === node.id ? "border-[#B9CBFF] bg-[#EEF4FF] text-[#4C72FF] shadow-[0_10px_24px_rgba(76,114,255,0.08)]" : "border-transparent bg-white text-slate-700 shadow-[0_4px_14px_rgba(15,23,42,0.03)] hover:border-slate-100 hover:bg-slate-50 hover:shadow-[0_8px_18px_rgba(15,23,42,0.05)]"}`}
-              >
-                <span className={`inline-flex ${meta.size} shrink-0 items-center justify-center rounded-full px-2 text-[11px] font-semibold ${meta.badge}`}>{meta.label}</span>
-                <span className={`truncate ${meta.text}`}>{node.name}</span>
-                {node.orgType !== "HALL" && <span className="ml-auto shrink-0 text-xs text-slate-400">{node.orgCode}</span>}
+              <button type="button" onClick={() => onSelect(node.id)} className={containerClass}>
+                <span className={`inline-flex ${meta.size} shrink-0 items-center justify-center rounded-full px-2 text-[11px] font-semibold ${badgeStyle}`}>
+                  {meta.label}
+                </span>
+                <span className={`truncate ${textColorClass}`}>{node.name}</span>
+
+                <span className="ml-auto flex shrink-0 items-center gap-1">
+                  {isManualPause && (
+                    <span title="组织暂停" className="flex items-center">
+                      <PauseCircle size={14} className="text-slate-400" />
+                    </span>
+                  )}
+                  {isCascadePause && (
+                    <span title="级联暂停" className="flex items-center">
+                      <PauseCircle size={14} className="text-slate-300 opacity-60" />
+                    </span>
+                  )}
+                  {hasPausedDescendant && (
+                    <span title="有下级已暂停" className="flex items-center">
+                      <AlertCircle size={13} className="text-amber-400 opacity-70" />
+                    </span>
+                  )}
+                  {!isPaused && !hasPausedDescendant && node.orgType !== "HALL" && (
+                    <span className="text-xs text-slate-400">{node.orgCode}</span>
+                  )}
+                </span>
               </button>
             </div>
             {expandable && !collapsed && node.children.length > 0 && (
@@ -56,6 +121,8 @@ export function OrgTree({ nodes, selectedOrgId, onSelect, collapsedIds = new Set
                   onSelect={onSelect}
                   collapsedIds={collapsedIds}
                   onToggleCollapse={onToggleCollapse}
+                  showOnlyPaused={showOnlyPaused}
+                  pausedDescendantIds={pausedDescendantIds}
                 />
               </div>
             )}

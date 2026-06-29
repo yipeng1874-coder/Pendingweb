@@ -704,6 +704,13 @@ export async function ensureHallDailyRecordsForToday() {
       });
       if (existing) continue;
 
+      // 跳过已暂停的厅（组织被暂停则不应生成当日 record）
+      const hallActive = await prisma.orgUnit.findFirst({
+        where: { id: target.hallOrgId, status: "active" },
+        select: { id: true },
+      });
+      if (!hallActive) continue;
+
       // 创建 record，并同时预建所有题目的 itemRecord
       await prisma.$transaction(async (tx) => {
         // 双重检查（防并发）

@@ -52,6 +52,10 @@ function safeUser<T extends { passwordHash?: string }>(user: T) {
   return rest;
 }
 
+function filterValidIdentities<T extends { roleCode: string; org?: { status: string } | null }>(identities: T[]): T[] {
+  return identities.filter((i) => i.roleCode === "DEV_ADMIN" || !i.org || i.org.status !== "paused");
+}
+
 function makeJwt(userId: string) {
   return jwt.sign({ userId }, env.JWT_SECRET, { expiresIn: env.JWT_EXPIRES_IN as any });
 }
@@ -286,7 +290,8 @@ authRoutes.post("/login", async (req, res) => {
     return fail(res, "ACCOUNT_INACTIVE", "账号状态异常，请联系上级管理员", 403);
   }
   await prisma.user.update({ where: { id: user.id }, data: { lastLoginAt: new Date() } });
-  const identities = await prisma.userIdentity.findMany({ where: { userId: user.id, status: "active" }, include: { org: true, anchorProfile: true } });
+  const allIdentities = await prisma.userIdentity.findMany({ where: { userId: user.id, status: "active" }, include: { org: true, anchorProfile: true } });
+  const identities = filterValidIdentities(allIdentities);
   const token = makeJwt(user.id);
   return ok(res, { token, user: safeUser(user), identities });
 });
@@ -406,7 +411,8 @@ authRoutes.post("/feishu/complete-login", async (req, res) => {
       },
     });
     const identities = await prisma.userIdentity.findMany({ where: { userId: user.id, status: "active" }, include: { org: true, anchorProfile: true } });
-    return ok(res, { token: makeJwt(user.id), user: safeUser(user), identities });
+    const validIdentities = filterValidIdentities(identities);
+    return ok(res, { token: makeJwt(user.id), user: safeUser(user), identities: validIdentities });
   } catch (err) {
     return fail(res, "FEISHU_LOGIN_FAILED", err instanceof Error ? err.message : "飞书登录失败", 400);
   }
@@ -498,8 +504,9 @@ authRoutes.post("/feishu/app-login", async (req, res) => {
 
     await prisma.user.update({ where: { id: user.id }, data: { lastLoginAt: new Date(), feishuConfigId: config.id, feishuName: profile.name, feishuAvatarUrl: profile.avatar_url } });
     const identities = await prisma.userIdentity.findMany({ where: { userId: user.id, status: "active" }, include: { org: true, anchorProfile: true } });
+    const validIdentities = filterValidIdentities(identities);
     const { passwordHash: _ph, ...safeU } = user as any;
-    return ok(res, { token: makeJwt(user.id), user: safeU, identities });
+    return ok(res, { token: makeJwt(user.id), user: safeU, identities: validIdentities });
   } catch (err) {
     return fail(res, "FEISHU_APP_LOGIN_FAILED", err instanceof Error ? err.message : "飞书免登失败", 500);
   }

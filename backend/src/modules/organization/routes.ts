@@ -202,6 +202,7 @@ organizationRoutes.get("/orgs/tree", permissionRequired("org:view"), async (req,
       isVirtual: true,
       remark: true,
       status: true,
+      pausedByCascade: true,
     },
     orderBy: [{ depth: "asc" }, { orgCode: "asc" }],
   });
@@ -491,7 +492,81 @@ organizationRoutes.post("/orgs/:id/pause", permissionRequired("org:pause"), asyn
   if (writeScopePath && !isAncestorPath(writeScopePath, org.path) && org.path !== writeScopePath) {
     return fail(res, "FORBIDDEN", "无权暂停该组织", 403);
   }
-  const updated = await prisma.orgUnit.update({ where: { id: req.params.id }, data: { status: "paused" } });
+
+  const updated = await prisma.$transaction(async (tx) => {
+    // 1. 级联暂停组织：查找目标组织及所有子孙组织
+    const allOrgs = await tx.orgUnit.findMany({
+      where: { path: { startsWith: org.path } },
+      select: { id: true, path: true, orgType: true, status: true },
+    });
+
+    const allOrgIds = allOrgs.map((o) => o.id);
+
+    // 暂停目标组织（非级联标记）
+    await tx.orgUnit.update({
+      where: { id: org.id },
+      data: { status: "paused", pausedByCascade: false },
+    });
+
+    // 级联暂停子孙组织：只暂停当前 active 的，already paused 的不动
+    const descendantIds = allOrgIds.filter((id) => id !== org.id);
+    if (descendantIds.length) {
+      await tx.orgUnit.updateMany({
+        where: { id: { in: descendantIds }, status: "active" },
+        data: { status: "paused", pausedByCascade: true },
+      });
+    }
+
+    // 收集所有已暂停的 org（含原本就暂停的子孙），用于禁用身份和主播
+    const pausedOrgIds = allOrgIds;
+
+    // 2. 禁用管理身份：非 ANCHOR、非 DEV_ADMIN、status=active
+    await tx.userIdentity.updateMany({
+      where: {
+        orgId: { in: pausedOrgIds },
+        roleCode: { notIn: ["ANCHOR", "DEV_ADMIN"] },
+        status: "active",
+      },
+      data: { status: "disabled", disabledByOrgPause: true },
+    });
+
+    // 3. 暂停主播档案并禁用主播身份
+    const hallOrgIds = allOrgs.filter((o) => o.orgType === "HALL").map((o) => o.id);
+    if (hallOrgIds.length) {
+      // 暂停主播档案：status=bound → inactive
+      const affectedProfiles = await tx.anchorProfile.findMany({
+        where: { hallOrgId: { in: hallOrgIds }, status: "bound" },
+        select: { id: true },
+      });
+      const affectedProfileIds = affectedProfiles.map((p) => p.id);
+
+      if (affectedProfileIds.length) {
+        await tx.anchorProfile.updateMany({
+          where: { id: { in: affectedProfileIds } },
+          data: { status: "inactive", inactiveByOrgPause: true },
+        });
+
+        // 禁用关联的主播身份
+        await tx.userIdentity.updateMany({
+          where: {
+            anchorProfileId: { in: affectedProfileIds },
+            roleCode: "ANCHOR",
+            status: "active",
+          },
+          data: { status: "disabled", disabledByOrgPause: true },
+        });
+      }
+    }
+
+    return tx.orgUnit.findUnique({
+      where: { id: org.id },
+      select: {
+        id: true, name: true, orgCode: true, orgType: true,
+        status: true, pausedByCascade: true, parentId: true, path: true,
+      },
+    });
+  });
+
   return ok(res, updated);
 });
 
@@ -502,7 +577,82 @@ organizationRoutes.post("/orgs/:id/restore", permissionRequired("org:restore"), 
   if (writeScopePath && !isAncestorPath(writeScopePath, org.path) && org.path !== writeScopePath) {
     return fail(res, "FORBIDDEN", "无权恢复该组织", 403);
   }
-  const updated = await prisma.orgUnit.update({ where: { id: req.params.id }, data: { status: "active" } });
+
+  const updated = await prisma.$transaction(async (tx) => {
+    // 1. 恢复目标组织（不论 pausedByCascade，目标组织必须恢复）
+    await tx.orgUnit.update({
+      where: { id: org.id },
+      data: { status: "active", pausedByCascade: false },
+    });
+
+    // 2. 只恢复被级联暂停的子孙组织（手动暂停的不恢复）
+    const cascadeDescendants = await tx.orgUnit.findMany({
+      where: {
+        path: { startsWith: `${org.path}/` },
+        status: "paused",
+        pausedByCascade: true,
+      },
+      select: { id: true, orgType: true },
+    });
+    const descendantIds = cascadeDescendants.map((d) => d.id);
+    if (descendantIds.length) {
+      await tx.orgUnit.updateMany({
+        where: { id: { in: descendantIds } },
+        data: { status: "active", pausedByCascade: false },
+      });
+    }
+
+    // 收集所有恢复的组织 ID
+    const restoredOrgIds = [org.id, ...descendantIds];
+
+    // 3. 恢复管理身份：只恢复 disabledByOrgPause=true 的
+    await tx.userIdentity.updateMany({
+      where: {
+        orgId: { in: restoredOrgIds },
+        disabledByOrgPause: true,
+      },
+      data: { status: "active", disabledByOrgPause: false },
+    });
+
+    // 4. 恢复主播档案和身份
+    const restoredHallIds = [
+      ...(org.orgType === "HALL" ? [org.id] : []),
+      ...cascadeDescendants.filter((d) => d.orgType === "HALL").map((d) => d.id),
+    ];
+    if (restoredHallIds.length) {
+      // 恢复主播档案
+      const affectedProfiles = await tx.anchorProfile.findMany({
+        where: { hallOrgId: { in: restoredHallIds }, inactiveByOrgPause: true },
+        select: { id: true },
+      });
+      const affectedProfileIds = affectedProfiles.map((p) => p.id);
+
+      if (affectedProfileIds.length) {
+        await tx.anchorProfile.updateMany({
+          where: { id: { in: affectedProfileIds } },
+          data: { status: "bound", inactiveByOrgPause: false },
+        });
+
+        // 恢复关联的主播身份
+        await tx.userIdentity.updateMany({
+          where: {
+            anchorProfileId: { in: affectedProfileIds },
+            disabledByOrgPause: true,
+          },
+          data: { status: "active", disabledByOrgPause: false },
+        });
+      }
+    }
+
+    return tx.orgUnit.findUnique({
+      where: { id: org.id },
+      select: {
+        id: true, name: true, orgCode: true, orgType: true,
+        status: true, pausedByCascade: true, parentId: true, path: true,
+      },
+    });
+  });
+
   return ok(res, updated);
 });
 

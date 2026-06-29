@@ -69,6 +69,7 @@ model OrgUnit {
   isVirtual                      Boolean                         @default(false) @map("is_virtual")
   remark                         String?                         @db.Text
   status                         OrgStatus                       @default(active)
+  pausedByCascade                Boolean                         @default(false) @map("paused_by_cascade")
   createdAt                      DateTime                        @default(now()) @map("created_at")
   updatedAt                      DateTime                        @updatedAt @map("updated_at")
   anchorProfiles                 AnchorProfile[]
@@ -136,6 +137,7 @@ model AnchorProfile {
   boundUserId              String?                   @map("bound_user_id")
   source                   String                    @default("manual_import")
   status                   AnchorStatus              @default(unbound)
+  inactiveByOrgPause       Boolean                   @default(false) @map("inactive_by_org_pause")
   createdAt                DateTime                  @default(now()) @map("created_at")
   updatedAt                DateTime                  @updatedAt @map("updated_at")
   hallOrg                  OrgUnit                   @relation(fields: [hallOrgId], references: [id])
@@ -207,6 +209,7 @@ model UserIdentity {
   anchorProfileId        String?                  @map("anchor_profile_id")
   scopePath              String?                  @map("scope_path")
   status                 IdentityStatus           @default(active)
+  disabledByOrgPause     Boolean                  @default(false) @map("disabled_by_org_pause")
   grantedBy              String?                  @map("granted_by")
   grantedAt              DateTime                 @default(now()) @map("granted_at")
   expiredAt              DateTime?                @map("expired_at")

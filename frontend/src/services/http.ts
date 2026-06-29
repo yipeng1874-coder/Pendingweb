@@ -35,8 +35,25 @@ export async function request<T>(url: string, options: RequestInit = {}): Promis
     throw new Error("登录已过期，请重新登录");
   }
   if (!response.ok || !body.success) {
+    const errorCode = body.error?.code;
     console.error(body.error?.message ?? "请求失败");
     const error = new Error(body.error?.message ?? "请求失败") as Error & { responseBody?: ApiResponse<T> };
+
+    // ORG_PAUSED / IDENTITY_REQUIRED：触发重新获取身份列表，可能清空当前身份
+    if (errorCode === "ORG_PAUSED" || errorCode === "IDENTITY_REQUIRED") {
+      // 清除 localStorage 中可能残留的无效身份
+      useIdentityStore.getState().setIdentity(null as any);
+      // 非登录接口才做重定向，避免登录本身触发循环
+      if (!url.includes("/auth/login")) {
+        const feishuAppId = localStorage.getItem("feishu_entry_app_id");
+        if (feishuAppId && isInFeishuApp()) {
+          window.location.href = `/feishu-entry?appId=${feishuAppId}`;
+        } else {
+          window.location.href = "/login";
+        }
+      }
+    }
+
     error.responseBody = body;
     throw error;
   }
@@ -63,7 +80,18 @@ export async function requestForm<T>(url: string, formData: FormData): Promise<T
     throw new Error(`服务响应不是有效 JSON：${text ? text.slice(0, 120) : "空响应"}`);
   }
   if (!response.ok || !body.success) {
+    const errorCode = body.error?.code;
     const error = new Error(body.error?.message ?? "请求失败") as Error & { responseBody?: ApiResponse<T> };
+
+    if (errorCode === "ORG_PAUSED" || errorCode === "IDENTITY_REQUIRED") {
+      const feishuAppId = localStorage.getItem("feishu_entry_app_id");
+      if (feishuAppId && isInFeishuApp()) {
+        window.location.href = `/feishu-entry?appId=${feishuAppId}`;
+      } else {
+        window.location.href = "/login";
+      }
+    }
+
     error.responseBody = body;
     throw error;
   }

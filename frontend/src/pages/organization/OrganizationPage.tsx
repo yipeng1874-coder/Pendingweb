@@ -126,6 +126,7 @@ export function OrganizationPage() {
   const [collapsedIds, setCollapsedIds] = useState<Set<string>>(new Set());
   const [batchRows, setBatchRows] = useState<BatchHallRow[]>([]);
   const [showAdvanced, setShowAdvanced] = useState(false);
+  const [showOnlyPaused, setShowOnlyPaused] = useState(false);
   const childType = useMemo(() => selected ? nextTypeMap[selected.orgType] : undefined, [selected]);
   const moveCandidates = useMemo(() => selected ? orgs.filter((org) => org.orgType === parentTypeMap[selected.orgType] && org.id !== selected.id && !org.path.startsWith(`${selected.path}/`)) : [], [orgs, selected]);
   const hasChildren = useMemo(() => new Set(orgs.map((org) => org.parentId).filter(Boolean)), [orgs]);
@@ -135,7 +136,39 @@ export function OrganizationPage() {
   const showCreateChild = Boolean(childType);
   const showBatchHalls = selected?.orgType === "TEAM";
   const showMoveOrDelete = canMoveSelected || canDeleteSelected;
-  const orgTree = useMemo(() => buildOrgTree(orgs), [orgs]);
+  const activeOrgTree = useMemo(() => buildOrgTree(orgs.filter((o) => o.status !== "paused")), [orgs]);
+  const pausedOrgTree = useMemo(() => {
+    // 暂停组织 + 其完整祖先链（含 active 上级），保证层级上下文
+    const pausedIds = new Set(orgs.filter((o) => o.status === "paused").map((o) => o.id));
+    const ancestorIds = new Set<string>();
+    const parentMap = new Map(orgs.map((o) => [o.id, o]));
+    for (const id of pausedIds) {
+      let current = parentMap.get(id);
+      while (current?.parentId) {
+        const parent = parentMap.get(current.parentId);
+        if (!parent) break;
+        ancestorIds.add(parent.id);
+        current = parent;
+      }
+    }
+    const contextOrgIds = new Set([...pausedIds, ...ancestorIds]);
+    return buildOrgTree(orgs.filter((o) => contextOrgIds.has(o.id)));
+  }, [orgs]);
+  const pausedDescendantIds = useMemo(() => {
+    const parentMap = new Map(orgs.map((o) => [o.id, o.parentId]));
+    const result = new Set<string>();
+    for (const org of orgs) {
+      if (org.status !== "paused") continue;
+      let currentId = parentMap.get(org.id);
+      while (currentId) {
+        const parent = orgs.find((o) => o.id === currentId);
+        if (!parent || parent.status !== "active") break;
+        result.add(currentId);
+        currentId = parentMap.get(currentId);
+      }
+    }
+    return result;
+  }, [orgs]);
   const collapsibleIds = useMemo(() => orgs.filter((org) => hasChildren.has(org.id)).map((org) => org.id), [orgs, hasChildren]);
   const allCollapsed = collapsibleIds.length > 0 && collapsibleIds.every((id) => collapsedIds.has(id));
   const handleToggleAll = () => {
@@ -279,16 +312,36 @@ export function OrganizationPage() {
             <p className="mt-1 text-sm text-slate-500">统一组织树、编辑面板与批量导入的视觉风格。</p>
           </div>
           <div className="flex gap-2">
+            <div className="flex rounded-[16px] border border-slate-200 bg-slate-100 p-0.5">
+              <button
+                className={`rounded-[14px] px-3 py-1.5 text-xs font-medium transition-all ${
+                  !showOnlyPaused ? "bg-white text-[#4C72FF] shadow-sm" : "text-slate-400 hover:text-slate-600"
+                }`}
+                onClick={() => setShowOnlyPaused(false)}
+              >
+                只看生效
+              </button>
+              <button
+                className={`rounded-[14px] px-3 py-1.5 text-xs font-medium transition-all ${
+                  showOnlyPaused ? "bg-white text-[#4C72FF] shadow-sm" : "text-slate-400 hover:text-slate-600"
+                }`}
+                onClick={() => setShowOnlyPaused(true)}
+              >
+                只看暂停
+              </button>
+            </div>
             <button className="feishu-button-secondary h-9 px-3 text-xs" onClick={handleToggleAll}>{allCollapsed ? "全部展开" : "全部折叠"}</button>
           </div>
         </div>
         <div className="space-y-2">
           <OrgTree
-            nodes={orgTree}
+            nodes={showOnlyPaused ? pausedOrgTree : activeOrgTree}
             selectedOrgId={selected?.id ?? ""}
             onSelect={(orgId) => selectOrg(orgs.find((item) => item.id === orgId))}
             collapsedIds={collapsedIds}
             onToggleCollapse={toggleCollapsed}
+            showOnlyPaused={showOnlyPaused}
+            pausedDescendantIds={pausedDescendantIds}
           />
         </div>
       </section>
@@ -309,7 +362,7 @@ export function OrganizationPage() {
                   )}
                 </div>
                 <div className="flex flex-wrap items-center gap-3">
-                  <StatusTag status={selected.status} />
+                  <StatusTag status={selected.status} pausedByCascade={selected.pausedByCascade} />
                   {isEditing ? (
                     <>
                       <button className="feishu-button-secondary h-10 px-4" onClick={cancelEdit}>取消</button>

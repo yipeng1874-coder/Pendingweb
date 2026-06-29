@@ -15,16 +15,21 @@ export function IdentitySwitcher() {
   const current = useIdentityStore((state) => state.currentIdentity);
   const setIdentity = useIdentityStore((state) => state.setIdentity);
 
+  // 过滤掉关联组织已暂停的身份（DEV_ADMIN 例外）
+  const validIdentities = identities.filter(
+    (i) => i.roleCode === "DEV_ADMIN" || !i.org || i.org.status !== "paused"
+  );
+
   return (
     <select
       className="rounded-xl border border-blue-100 bg-white px-3 py-2 text-sm font-medium text-slate-700 shadow-sm outline-none focus:border-feishu-blue"
       value={current?.id ?? ""}
       onChange={(event) => {
-        const next = identities.find((item) => item.id === event.target.value);
+        const next = validIdentities.find((item) => item.id === event.target.value);
         if (next) setIdentity(next);
       }}
     >
-      {identities.map((identity) => (
+      {validIdentities.map((identity) => (
         <option key={identity.id} value={identity.id}>
           {roleNames[identity.roleCode]} · {identity.org?.name ?? identity.scopePath ?? "个人身份"}
         </option>

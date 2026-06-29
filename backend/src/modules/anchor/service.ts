@@ -706,6 +706,7 @@ export const AnchorService = {
             douyinNo: archivedDouyinNo || null,
             douyinUid: archivedDouyinUid,
             status: "inactive",
+            inactiveByOrgPause: false,
           },
         });
       } catch (error) {
@@ -720,7 +721,7 @@ export const AnchorService = {
 
       await tx.userIdentity.updateMany({
         where: { userId: current.boundUserId, roleCode: "ANCHOR", anchorProfileId: current.id },
-        data: { status: "disabled", expiredAt: new Date() },
+        data: { status: "disabled", expiredAt: new Date(), disabledByOrgPause: false },
       });
 
       const nextProfile = await tx.anchorProfile.create({
@@ -781,12 +782,12 @@ export const AnchorService = {
             throw createAnchorBusinessError("ANCHOR_PROFILE_ACTIVE_IDENTITY_CONFLICT", "该账号已存在其他启用中的主播身份，不能重复启用");
           }
           await tx.user.update({ where: { id: profile.boundUserId }, data: { status: "active" } });
-          await tx.userIdentity.updateMany({ where: { userId: profile.boundUserId, anchorProfileId: profile.id, roleCode: "ANCHOR" }, data: { status: "active", expiredAt: null, scopePath: hall?.path } });
+          await tx.userIdentity.updateMany({ where: { userId: profile.boundUserId, anchorProfileId: profile.id, roleCode: "ANCHOR" }, data: { status: "active", expiredAt: null, scopePath: hall?.path, disabledByOrgPause: false } });
         }
-        return tx.anchorProfile.update({ where: { id: profile.id }, data: { status: profile.boundUserId ? "bound" : "unbound" } });
+        return tx.anchorProfile.update({ where: { id: profile.id }, data: { status: profile.boundUserId ? "bound" : "unbound", inactiveByOrgPause: false } });
       } else {
-        await tx.userIdentity.updateMany({ where: { anchorProfileId: profile.id, roleCode: "ANCHOR" }, data: { status: "disabled", expiredAt: new Date() } });
-        return tx.anchorProfile.update({ where: { id: profile.id }, data: { status: "inactive" } });
+        await tx.userIdentity.updateMany({ where: { anchorProfileId: profile.id, roleCode: "ANCHOR" }, data: { status: "disabled", expiredAt: new Date(), disabledByOrgPause: false } });
+        return tx.anchorProfile.update({ where: { id: profile.id }, data: { status: "inactive", inactiveByOrgPause: false } });
       }
     });
   },

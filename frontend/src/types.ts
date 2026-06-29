@@ -39,6 +39,7 @@ export interface OrgUnit {
   isVirtual?: boolean;
   remark?: string;
   status: "active" | "paused";
+  pausedByCascade?: boolean;
   hasChildren?: boolean;
   childCount?: number;
 }
