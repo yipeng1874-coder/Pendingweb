@@ -590,25 +590,44 @@ export type OperatorStat = {
   onlineCount: number;
   offlineCount: number;
   within7Days: number;
-  within30Days: number;
+  within20Days: number;
+  dailyNew: number;
 };
 
 export type AnchorDailySummary = {
   id: string;
   baseOrgId: string;
   baseOrgName: string;
-  uploadDate: string;
+  recordDate: string;
   uploadedBy: string;
   uploaderName: string;
   totalCount: number;
   onlineCount: number;
   offlineCount: number;
   within7Days: number;
-  within30Days: number;
+  within20Days: number;
+  dailyNew: number;
   operatorStats: OperatorStat[];
   rawRowCount: number;
   createdAt: string;
   updatedAt: string;
+};
+
+export type AnchorTrendPoint = {
+  recordDate: string;
+  totalCount: number;
+  onlineCount: number;
+  offlineCount: number;
+  within7Days: number;
+  within20Days: number;
+  dailyNew: number;
+};
+
+export type AnchorTrendResponse = {
+  baseOrgId: string;
+  baseOrgName: string;
+  points: AnchorTrendPoint[];
+  latest: AnchorDailySummary | null;
 };
 
 export const anchorSummaryApi = {
@@ -618,12 +637,290 @@ export const anchorSummaryApi = {
     const q = params.toString();
     return api.get<AnchorDailySummary | null>(`/anchor-summary/latest${q ? `?${q}` : ""}`);
   },
-  upload: (file: File, scopeOrgId?: string) => {
+  getTrend: (scopeOrgId?: string, days = 7) => {
+    const params = new URLSearchParams();
+    if (scopeOrgId) params.set("scopeOrgId", scopeOrgId);
+    params.set("days", String(days));
+    const q = params.toString();
+    return api.get<AnchorTrendResponse>(`/anchor-summary/trend?${q}`);
+  },
+  upload: (file: File, scopeOrgId?: string, recordDate?: string) => {
     const formData = new FormData();
     formData.append("file", file);
+    if (recordDate) formData.append("recordDate", recordDate);
     const params = new URLSearchParams();
     if (scopeOrgId) params.set("scopeOrgId", scopeOrgId);
     const q = params.toString();
     return api.postForm<AnchorDailySummary>(`/anchor-summary/upload${q ? `?${q}` : ""}`, formData);
+  },
+};
+
+// ---------- 厅个数汇总 ----------
+
+export type HallOperatorStat = {
+  operator: string;
+  formalHallCount: number;
+  trainingHallCount: number;
+  totalCount: number;
+};
+
+export type HallDailySummary = {
+  id: string;
+  baseOrgId: string;
+  baseOrgName: string;
+  recordDate: string;
+  uploadedBy: string;
+  uploaderName: string;
+  formalHallCount: number;
+  trainingHallCount: number;
+  totalHallCount: number;
+  operatorStats: HallOperatorStat[];
+  rawRowCount: number;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type HallTrendPoint = {
+  recordDate: string;
+  formalHallCount: number;
+  trainingHallCount: number;
+  totalHallCount: number;
+};
+
+export type HallPrevDay = {
+  recordDate: string;
+  operatorStats: HallOperatorStat[];
+};
+
+export type HallTrendResponse = {
+  baseOrgId: string;
+  baseOrgName: string;
+  points: HallTrendPoint[];
+  latest: HallDailySummary | null;
+  prevDay: HallPrevDay | null;
+};
+
+export const hallSummaryApi = {
+  getLatest: (scopeOrgId?: string) => {
+    const params = new URLSearchParams();
+    if (scopeOrgId) params.set("scopeOrgId", scopeOrgId);
+    const q = params.toString();
+    return api.get<HallDailySummary | null>(`/hall-summary/latest${q ? `?${q}` : ""}`);
+  },
+  getTrend: (scopeOrgId?: string, days = 7) => {
+    const params = new URLSearchParams();
+    if (scopeOrgId) params.set("scopeOrgId", scopeOrgId);
+    params.set("days", String(days));
+    const q = params.toString();
+    return api.get<HallTrendResponse>(`/hall-summary/trend?${q}`);
+  },
+  upload: (file: File, scopeOrgId?: string, recordDate?: string) => {
+    const formData = new FormData();
+    formData.append("file", file);
+    if (recordDate) formData.append("recordDate", recordDate);
+    const params = new URLSearchParams();
+    if (scopeOrgId) params.set("scopeOrgId", scopeOrgId);
+    if (recordDate) params.set("recordDate", recordDate);
+    const q = params.toString();
+    return api.postForm<HallDailySummary>(`/hall-summary/upload${q ? `?${q}` : ""}`, formData);
+  },
+};
+
+// ---------- 主播流失汇总 ----------
+
+export type AnchorLossDailySummary = {
+  id: string;
+  baseOrgId: string;
+  baseOrgName: string;
+  recordDate: string;
+  uploadedBy: string;
+  uploaderName: string;
+  lossWithin30Days: number;
+  lossYesterday: number;
+  totalLossCount: number;
+  rawRowCount: number;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type AnchorLossTrendPoint = {
+  recordDate: string;
+  lossWithin30Days: number;
+  lossYesterday: number;
+  lossDetail: Record<string, number>;
+  lossOperatorDetail: Record<string, Record<string, number>>;
+};
+
+export type AnchorLossTrendResponse = {
+  baseOrgId: string;
+  baseOrgName: string;
+  points: AnchorLossTrendPoint[];
+  latest: Pick<AnchorLossDailySummary, "id" | "recordDate" | "lossWithin30Days" | "lossYesterday" | "totalLossCount"> & { lossDetail: Record<string, number>; lossOperatorDetail: Record<string, Record<string, number>> } | null;
+};
+
+export const anchorLossSummaryApi = {
+  getLatest: (scopeOrgId?: string) => {
+    const params = new URLSearchParams();
+    if (scopeOrgId) params.set("scopeOrgId", scopeOrgId);
+    const q = params.toString();
+    return api.get<AnchorLossDailySummary | null>(`/anchor-loss-summary/latest${q ? `?${q}` : ""}`);
+  },
+  getTrend: (scopeOrgId?: string, days = 7) => {
+    const params = new URLSearchParams();
+    if (scopeOrgId) params.set("scopeOrgId", scopeOrgId);
+    params.set("days", String(days));
+    const q = params.toString();
+    return api.get<AnchorLossTrendResponse>(`/anchor-loss-summary/trend?${q}`);
+  },
+  upload: (file: File, scopeOrgId?: string, recordDate?: string) => {
+    const formData = new FormData();
+    formData.append("file", file);
+    if (recordDate) formData.append("recordDate", recordDate);
+    const params = new URLSearchParams();
+    if (scopeOrgId) params.set("scopeOrgId", scopeOrgId);
+    if (recordDate) params.set("recordDate", recordDate);
+    const q = params.toString();
+    return api.postForm<AnchorLossDailySummary>(`/anchor-loss-summary/upload${q ? `?${q}` : ""}`, formData);
+  },
+};
+
+// ---------- 数据看板统一上传 ----------
+
+export type DataOverviewUploadResult = {
+  recordDate: string;
+  baseOrgId: string;
+  hall?: { formalHallCount: number; trainingHallCount: number };
+  loss?: { lossWithin30Days: number; lossYesterday: number };
+};
+
+export const dataOverviewApi = {
+  upload: (file: File, scopeOrgId?: string, recordDate?: string) => {
+    const formData = new FormData();
+    formData.append("file", file);
+    if (recordDate) formData.append("recordDate", recordDate);
+    const params = new URLSearchParams();
+    if (scopeOrgId) params.set("scopeOrgId", scopeOrgId);
+    if (recordDate) params.set("recordDate", recordDate);
+    const q = params.toString();
+    return api.postForm<DataOverviewUploadResult>(`/data-overview/upload${q ? `?${q}` : ""}`, formData);
+  },
+};
+
+// ---------- 基地直播间空余 ----------
+
+export type LiveRoomCapacity = {
+  id: string;
+  baseOrgId: string;
+  baseOrgName: string;
+  totalCount: number;
+  liveRoomUsed: number;
+  officeUsed: number;
+  updatedBy: string;
+  updaterName: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type LiveRoomUpsertInput = {
+  totalCount: number;
+  liveRoomUsed: number;
+  officeUsed: number;
+};
+
+export const liveRoomCapacityApi = {
+  getLatest: (scopeOrgId?: string) => {
+    const params = new URLSearchParams();
+    if (scopeOrgId) params.set("scopeOrgId", scopeOrgId);
+    const q = params.toString();
+    return api.get<LiveRoomCapacity | null>(`/live-room-capacity/latest${q ? `?${q}` : ""}`);
+  },
+  upsert: (data: LiveRoomUpsertInput, scopeOrgId?: string) => {
+    const params = new URLSearchParams();
+    if (scopeOrgId) params.set("scopeOrgId", scopeOrgId);
+    const q = params.toString();
+    return api.post<LiveRoomCapacity>(`/live-room-capacity/upsert${q ? `?${q}` : ""}`, data);
+  },
+};
+
+// ---------- 人均音浪 ----------
+
+export type AnchorAvgWaveDaily = {
+  id: string;
+  baseOrgId: string;
+  baseOrgName: string;
+  recordDate: string;
+  waveType: string;
+  avgWaveValue: number;
+  totalWave: number;
+  anchorCount: number;
+  uploadedBy: string;
+  uploaderName: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type AnchorAvgWaveTrendPoint = {
+  recordDate: string;
+  avgWaveValue: number;
+};
+
+export type AnchorAvgWaveLatest = {
+  id: string;
+  recordDate: string;
+  avgWaveValue: number;
+  totalWave: number;
+  anchorCount: number;
+  uploadedBy: string;
+  uploaderName: string;
+};
+
+export type WaveTypeTrend = {
+  points: AnchorAvgWaveTrendPoint[];
+  latest: AnchorAvgWaveLatest | null;
+  prevDay: { recordDate: string; avgWaveValue: number } | null;
+  change: number;
+};
+
+export type AnchorAvgWaveTrendResponse = {
+  baseOrgId: string;
+  baseOrgName: string;
+  online: WaveTypeTrend;
+  offline: WaveTypeTrend;
+  total: WaveTypeTrend;
+};
+
+export type AnchorAvgWaveUpsertInput = {
+  recordDate: string;
+  avgWaveValue: number;
+  waveType?: string;
+  totalWave?: number;
+  anchorCount?: number;
+};
+
+export type AnchorAvgWaveLatestResponse = {
+  online: AnchorAvgWaveDaily | null;
+  offline: AnchorAvgWaveDaily | null;
+  total: AnchorAvgWaveDaily | null;
+};
+
+export const anchorAvgWaveApi = {
+  getLatest: (scopeOrgId?: string) => {
+    const params = new URLSearchParams();
+    if (scopeOrgId) params.set("scopeOrgId", scopeOrgId);
+    const q = params.toString();
+    return api.get<AnchorAvgWaveLatestResponse>(`/anchor-avg-wave/latest${q ? `?${q}` : ""}`);
+  },
+  getTrend: (scopeOrgId?: string, days = 7) => {
+    const params = new URLSearchParams();
+    if (scopeOrgId) params.set("scopeOrgId", scopeOrgId);
+    params.set("days", String(days));
+    const q = params.toString();
+    return api.get<AnchorAvgWaveTrendResponse>(`/anchor-avg-wave/trend?${q}`);
+  },
+  upsert: (data: AnchorAvgWaveUpsertInput, scopeOrgId?: string) => {
+    const params = new URLSearchParams();
+    if (scopeOrgId) params.set("scopeOrgId", scopeOrgId);
+    const q = params.toString();
+    return api.post<AnchorAvgWaveDaily>(`/anchor-avg-wave/upsert${q ? `?${q}` : ""}`, data);
   },
 };

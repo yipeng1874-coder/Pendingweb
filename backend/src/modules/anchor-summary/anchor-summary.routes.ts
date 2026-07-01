@@ -25,10 +25,19 @@ function parseExcelDate(val: unknown): Date | null {
   return null;
 }
 
-function isWithinDays(date: Date, days: number, today: Date): boolean {
-  const diffMs = today.getTime() - date.getTime();
+function isWithinDays(date: Date, days: number, referenceDate: Date): boolean {
+  const diffMs = referenceDate.getTime() - date.getTime();
   const diffDays = diffMs / 86400000;
   return diffDays >= 0 && diffDays <= days;
+}
+
+/** 判断两个日期是否是同一天（用于当日新增） */
+function isSameDay(a: Date, b: Date): boolean {
+  return (
+    a.getFullYear() === b.getFullYear() &&
+    a.getMonth() === b.getMonth() &&
+    a.getDate() === b.getDate()
+  );
 }
 
 /** 解析 BASE 级别作用域（与 report.routes.ts 保持一致） */
@@ -113,7 +122,8 @@ export type OperatorStat = {
   onlineCount: number;
   offlineCount: number;
   within7Days: number;
-  within30Days: number;
+  within20Days: number;
+  dailyNew: number;
 };
 
 // ---------- 路由 ----------
@@ -159,6 +169,12 @@ anchorSummaryRoutes.post(
       return fail(res, e.message, msgMap[e.message] ?? "鉴权失败", 403);
     }
 
+    // recordDate 必填（格式 YYYY-MM-DD）
+    const recordDate = (req.body?.recordDate ?? "").toString().trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(recordDate)) {
+      return fail(res, "INVALID_RECORD_DATE", "请提供有效的归属日期（YYYY-MM-DD）", 400);
+    }
+
     // 解析 Excel
     let wb: xlsx.WorkBook;
     try {
@@ -190,14 +206,16 @@ anchorSummaryRoutes.post(
     // 找入职日期列
     const joinDateCol = JOIN_DATE_COL_CANDIDATES.find((c) => headers.includes(c)) ?? null;
 
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
+    // 使用 recordDate（归属日期）作为计算基准，而非今天
+    const refDate = new Date(recordDate);
+    refDate.setHours(0, 0, 0, 0);
 
     let totalCount = 0;
     let onlineCount = 0;
     let offlineCount = 0;
     let within7Days = 0;
-    let within30Days = 0;
+    let within20Days = 0;
+    let dailyNew = 0;
 
     const operatorMap = new Map<string, OperatorStat>();
 
@@ -221,8 +239,9 @@ anchorSummaryRoutes.post(
       else offlineCount++;
 
       if (joinDate) {
-        if (isWithinDays(joinDate, 7, today)) within7Days++;
-        if (isWithinDays(joinDate, 30, today)) within30Days++;
+        if (isWithinDays(joinDate, 7, refDate)) within7Days++;
+        if (isWithinDays(joinDate, 20, refDate)) within20Days++;
+        if (isSameDay(joinDate, refDate)) dailyNew++;
       }
 
       // 运营分组
@@ -233,7 +252,8 @@ anchorSummaryRoutes.post(
           onlineCount: 0,
           offlineCount: 0,
           within7Days: 0,
-          within30Days: 0,
+          within20Days: 0,
+          dailyNew: 0,
         });
       }
       const opStat = operatorMap.get(operatorName)!;
@@ -241,8 +261,9 @@ anchorSummaryRoutes.post(
       if (isOnline) opStat.onlineCount++;
       else opStat.offlineCount++;
       if (joinDate) {
-        if (isWithinDays(joinDate, 7, today)) opStat.within7Days++;
-        if (isWithinDays(joinDate, 30, today)) opStat.within30Days++;
+        if (isWithinDays(joinDate, 7, refDate)) opStat.within7Days++;
+        if (isWithinDays(joinDate, 20, refDate)) opStat.within20Days++;
+        if (isSameDay(joinDate, refDate)) opStat.dailyNew++;
       }
     }
 
@@ -256,35 +277,34 @@ anchorSummaryRoutes.post(
       select: { nickname: true },
     });
 
-    const uploadDate = today.toISOString().slice(0, 10);
-
-    // upsert
+    // upsert（按联合唯一键 baseOrgId + recordDate）
     const record = await prisma.anchorDailySummary.upsert({
-      where: { baseOrgId: baseOrg.id },
+      where: { baseOrgId_recordDate: { baseOrgId: baseOrg.id, recordDate } },
       create: {
         baseOrgId: baseOrg.id,
         baseOrgName: baseOrg.name,
-        uploadDate,
+        recordDate,
         uploadedBy: req.userId,
         uploaderName: uploader?.nickname ?? "未知",
         totalCount,
         onlineCount,
         offlineCount,
         within7Days,
-        within30Days,
+        within20Days,
+        dailyNew,
         operatorStats,
         rawRowCount: rows.length,
       },
       update: {
         baseOrgName: baseOrg.name,
-        uploadDate,
         uploadedBy: req.userId,
         uploaderName: uploader?.nickname ?? "未知",
         totalCount,
         onlineCount,
         offlineCount,
         within7Days,
-        within30Days,
+        within20Days,
+        dailyNew,
         operatorStats,
         rawRowCount: rows.length,
       },
@@ -311,10 +331,79 @@ anchorSummaryRoutes.get(
       return fail(res, e.message, msgMap[e.message] ?? "鉴权失败", 403);
     }
 
-    const record = await prisma.anchorDailySummary.findUnique({
+    // 查最新一条记录（按 recordDate 降序）
+    const record = await prisma.anchorDailySummary.findFirst({
       where: { baseOrgId: baseOrg.id },
+      orderBy: { recordDate: "desc" },
     });
 
     return ok(res, record ?? null);
+  }
+);
+
+/** 趋势接口：GET /anchor-summary/trend?scopeOrgId=xxx&days=7 */
+anchorSummaryRoutes.get(
+  "/anchor-summary/trend",
+  permissionRequired("task:report:view"),
+  async (req: any, res: any) => {
+    let baseOrg: { id: string; name: string };
+    try {
+      baseOrg = await resolveBaseScopeOrg(req.query.scopeOrgId as string | undefined, req.identity);
+    } catch (e: any) {
+      const msgMap: Record<string, string> = {
+        BASE_SCOPE_REQUIRED: "请先选择基地",
+        SCOPE_ORG_NOT_FOUND: "基地不存在",
+        SCOPE_ORG_FORBIDDEN: "无权访问该基地",
+      };
+      return fail(res, e.message, msgMap[e.message] ?? "鉴权失败", 403);
+    }
+
+    const rawDays = parseInt(req.query.days as string, 10);
+    const days = Number.isFinite(rawDays) && rawDays > 0 ? Math.min(rawDays, 90) : 7;
+
+    // 取最近 N 天的数据（按 recordDate 降序再升序）
+    const records = await prisma.anchorDailySummary.findMany({
+      where: { baseOrgId: baseOrg.id },
+      orderBy: { recordDate: "desc" },
+      take: days,
+    });
+
+    // 转为升序便于前端画趋势图
+    records.reverse();
+
+    // 最新一条作为 summary 信息
+    const latest = records.length > 0 ? records[records.length - 1] : null;
+
+    return ok(res, {
+      baseOrgId: baseOrg.id,
+      baseOrgName: baseOrg.name,
+      points: records.map((r) => ({
+        recordDate: r.recordDate,
+        totalCount: r.totalCount,
+        onlineCount: r.onlineCount,
+        offlineCount: r.offlineCount,
+        within7Days: r.within7Days,
+        within20Days: r.within20Days,
+        dailyNew: r.dailyNew,
+      })),
+      latest: latest
+        ? {
+            id: latest.id,
+            recordDate: latest.recordDate,
+            uploadedBy: latest.uploadedBy,
+            uploaderName: latest.uploaderName,
+            totalCount: latest.totalCount,
+            onlineCount: latest.onlineCount,
+            offlineCount: latest.offlineCount,
+            within7Days: latest.within7Days,
+            within20Days: latest.within20Days,
+            dailyNew: latest.dailyNew,
+            operatorStats: latest.operatorStats,
+            rawRowCount: latest.rawRowCount,
+            createdAt: latest.createdAt,
+            updatedAt: latest.updatedAt,
+          }
+        : null,
+    });
   }
 );

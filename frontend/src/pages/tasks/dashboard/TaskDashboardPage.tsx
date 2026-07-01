@@ -1,6 +1,6 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Bell, Building2, CheckCircle2, ChevronDown, ChevronUp, ExternalLink, GitBranch, Megaphone, Plus, RefreshCw, Send, Sparkles, UserRound, Users2, X } from "lucide-react";
+import { Bell, Building2, CheckCircle2, ChevronDown, ChevronUp, Eye, EyeOff, ExternalLink, GitBranch, ListTodo, Megaphone, Plus, RefreshCw, Send, UserRound, Users2, X } from "lucide-react";
 
 import type { PersonalReminder, TaskRecord, TemporaryTaskMode } from "../../../types";
 import { hallDailyApi, recordApi, reminderApi } from "../../../services/task";
@@ -116,10 +116,6 @@ function getYesterdayRecordDate() {
   return getBeijingRecordDate(-1);
 }
 
-function countTodayFocusedDailyRecords(records: TaskRecord[]) {
-  const today = getTodayRecordDate();
-  return records.filter((record) => record.assignment?.category === "DAILY" && record.recordDate === today && record.status !== "submitted").length;
-}
 
 function countUrgentRecords(records: TaskRecord[]) {
   return records.filter(isRecordUrgent).length;
@@ -155,6 +151,10 @@ function SubSection({
   isRecordUrgent,
   isRecordOverdue,
   currentIdentityId,
+  sectionKey,
+  isHighlighted,
+  highlightColor,
+  onHighlightDone,
 }: {
   tone: string;
   icon: React.ReactNode;
@@ -169,8 +169,44 @@ function SubSection({
   isRecordUrgent: (r: TaskRecord) => boolean;
   isRecordOverdue: (r: TaskRecord) => boolean;
   currentIdentityId?: string;
+  sectionKey?: string;
+  isHighlighted?: boolean;
+  highlightColor?: string;
+  onHighlightDone?: () => void;
 }) {
   const [collapsed, setCollapsed] = useState(() => records.length === 0);
+  const subRef = useRef<HTMLDivElement>(null);
+  const [highlightPhase, setHighlightPhase] = useState<"pulse" | "breathe" | null>(null);
+
+  useEffect(() => {
+    if (isHighlighted) {
+      // 先展开折叠的卡片
+      setCollapsed(false);
+      // 滚动到视图中央
+      subRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+      // 阶段1：滚动到位后脉冲闪烁 0.9s
+      const t1 = setTimeout(() => setHighlightPhase("pulse"), 400);
+      // 阶段2：脉冲结束后呼吸辉光 2.5s
+      const t2 = setTimeout(() => setHighlightPhase("breathe"), 400 + 900);
+      // 全部结束后清除
+      const t3 = setTimeout(() => {
+        setHighlightPhase(null);
+        onHighlightDone?.();
+      }, 400 + 900 + 2500);
+      return () => {
+        clearTimeout(t1);
+        clearTimeout(t2);
+        clearTimeout(t3);
+      };
+    }
+  }, [isHighlighted, onHighlightDone]);
+
+  const animClass =
+    highlightPhase === "pulse"
+      ? "animate-[kpi-pulse-flash_0.9s_ease-in-out]"
+      : highlightPhase === "breathe"
+        ? "animate-[kpi-breathe_2.5s_ease-in-out]"
+        : "";
 
   const incompleteCount = React.useMemo(() => records.filter((r) => r.status !== "submitted").length, [records]);
 
@@ -182,7 +218,12 @@ function SubSection({
   }, [records, incompleteCount, description, formatDeadline]);
 
   return (
-    <div className="min-w-0 rounded-2xl border border-slate-100 bg-slate-50/60 p-2">
+    <div
+      ref={subRef}
+      data-section-key={sectionKey}
+      className={`min-w-0 rounded-2xl border border-slate-100 bg-slate-50/60 p-2 transition-all duration-300 ${animClass}`}
+      style={highlightPhase ? ({ "--pulse-color": highlightColor } as React.CSSProperties) : undefined}
+    >
       <div
         className="flex cursor-pointer items-center justify-between gap-2"
         onClick={() => setCollapsed((v) => !v)}
@@ -262,7 +303,16 @@ export function TaskDashboardPage() {
   const [showReminderModal, setShowReminderModal] = useState(false);
   const [reminderForm, setReminderForm] = useState<ReminderFormState>(defaultReminderForm());
   const [savingReminder, setSavingReminder] = useState(false);
+  const [hideEmptyGroups, setHideEmptyGroups] = useState(true);
+  const [highlightedSection, setHighlightedSection] = useState<{ key: string; color: string } | null>(null);
 
+  function handleKpiClick(key: string, color: string) {
+    setHighlightedSection({ key, color });
+  }
+
+  function handleHighlightDone() {
+    setHighlightedSection(null);
+  }
 
   async function load() {
     setLoading(true);
@@ -471,29 +521,153 @@ export function TaskDashboardPage() {
 
   return (
     <div className="space-y-2">
-      <section className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white/90 px-3 py-2 shadow-[0_4px_14px_rgba(15,23,42,0.035)]">
-        <div className="flex min-w-0 items-center gap-2">
-          <div className="inline-flex items-center gap-1.5 rounded-full bg-blue-50 px-2.5 py-0.5 text-sm font-semibold text-blue-700"><Sparkles size={13} />我的待办</div>
-          <h1 className="truncate text-lg font-bold tracking-tight text-slate-900">按任务类型聚焦待处理事项</h1>
-        </div>
-        <div className="flex items-center gap-2">
-          <div className="inline-flex items-center rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-sm font-bold text-amber-700">
-            今日待办 {countTodayFocusedDailyRecords(records)} 件
+      {/* 我的待办汇总 */}
+      {(() => {
+        const pending = records.filter((r) => r.status !== "submitted");
+        const daily = pending.filter((r) => r.assignment?.category === "DAILY");
+        const tmpAll = pending.filter((r) => r.assignment?.category === "TEMPORARY");
+        const tmpAccount = tmpAll.filter((r) => r.assignment?.temporaryMode === "ACCOUNT");
+        const tmpAnchor = tmpAll.filter((r) => r.assignment?.temporaryMode === "ANCHOR");
+        const tmpManager = tmpAll.filter((r) => r.assignment?.temporaryMode === "MANAGER");
+        // 主播日常：子项维度（已完成的 checklist 子项数 / 总子项数）
+        function calcProgress(rr: { totalItems: number; doneItems: number }[]) {
+          const total = rr.reduce((s, r) => s + (r.totalItems ?? 0), 0);
+          const done = rr.reduce((s, r) => s + (r.doneItems ?? 0), 0);
+          return { total, done, pct: total > 0 ? Math.round((done / total) * 100) : 0 };
+        }
+        // 其他类型：记录维度（已提交的记录数 / 总记录数）
+        function calcRecordProgress<T extends { status: string }>(rr: T[]) {
+          const total = rr.length;
+          const done = rr.filter((r) => r.status === "submitted").length;
+          return { total, done, pct: total > 0 ? Math.round((done / total) * 100) : 0 };
+        }
+        const workflowProgress = (() => {
+          const total = workflowTasks.length;
+          if (total === 0) return { total: 0, done: 0, pct: 0 };
+          const done = workflowTasks.filter((t) => {
+            const mySteps = t.steps.filter((s) => s.assigneeUserId === currentIdentity?.userId);
+            return mySteps.length > 0 && mySteps.every((s) => s.status === "completed");
+          }).length;
+          return { total, done, pct: Math.round((done / total) * 100) };
+        })();
+        const broadcastProgress = (() => {
+          const total = broadcastTasks.length;
+          if (total === 0) return { total: 0, done: 0, pct: 0 };
+          const done = broadcastTasks.filter((t) => t.myRecord.status === "submitted").length;
+          return { total, done, pct: Math.round((done / total) * 100) };
+        })();
+        const groups = [
+          { key: "daily", label: "主播日常", icon: <CheckCircle2 size={15} />, progress: calcProgress(daily), count: daily.length, color: "#3b82f6", bg: "bg-blue-50", text: "text-blue-600", bar: "from-blue-400 to-blue-600" },
+          { key: "hallDaily", label: "厅管日常", icon: <Building2 size={15} />, progress: calcRecordProgress(hallDailyTodayRecords), count: hallDailyTodayRecords.length, color: "#14b8a6", bg: "bg-teal-50", text: "text-teal-600", bar: "from-teal-400 to-teal-600" },
+          { key: "account", label: "触达式", icon: <Send size={15} />, progress: calcRecordProgress(tmpAccount), count: tmpAccount.length, color: "#06b6d4", bg: "bg-sky-50", text: "text-sky-600", bar: "from-sky-400 to-sky-600" },
+          { key: "anchor", label: "主播式", icon: <UserRound size={15} />, progress: calcRecordProgress(tmpAnchor), count: tmpAnchor.length, color: "#10b981", bg: "bg-emerald-50", text: "text-emerald-600", bar: "from-emerald-400 to-emerald-500" },
+          { key: "manager", label: "管理式", icon: <Users2 size={15} />, progress: calcRecordProgress(tmpManager), count: tmpManager.length, color: "#8b5cf6", bg: "bg-violet-50", text: "text-violet-600", bar: "from-violet-400 to-violet-600" },
+          { key: "workflow", label: "流转任务", icon: <GitBranch size={15} />, progress: workflowProgress, count: workflowTasks.length, color: "#6366f1", bg: "bg-indigo-50", text: "text-indigo-600", bar: "from-indigo-400 to-indigo-600" },
+          { key: "broadcast", label: "厅内直达", icon: <Megaphone size={15} />, progress: broadcastProgress, count: broadcastTasks.length, color: "#f97316", bg: "bg-orange-50", text: "text-orange-600", bar: "from-orange-400 to-orange-600" },
+          { key: "reminder", label: "个人提醒", icon: <Bell size={15} />, progress: { total: activeReminders.length, done: reminders.filter((r) => r.status !== "active").length, pct: 0 }, count: activeReminders.length, color: "#eab308", bg: "bg-amber-50", text: "text-amber-600", bar: "from-amber-400 to-amber-500" },
+        ];
+        const visibleGroups = hideEmptyGroups
+          ? groups.filter((g) => g.progress.total > 0)
+          : groups;
+        const gridCols = visibleGroups.length > 0 ? visibleGroups.length : 1;
+
+        return (
+          <div className="mb-3 rounded-2xl border border-blue-100 bg-gradient-to-r from-blue-50/80 via-white to-slate-50/60 px-4 py-3 shadow-sm">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <span className="flex h-7 w-7 items-center justify-center rounded-full bg-blue-100 text-blue-600"><ListTodo size={16} /></span>
+                <span className="text-[15px] font-bold text-slate-800">我的待办汇总</span>
+                <span className="rounded-full bg-white px-2.5 py-0.5 text-xs font-semibold text-slate-500 shadow-sm tabular-nums">
+                  {loading ? "…" : `${pending.length} 项未完成`}
+                </span>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setHideEmptyGroups((v) => !v)}
+                  disabled={loading}
+                  className={`inline-flex shrink-0 items-center gap-1 rounded-full px-3 py-1.5 text-sm font-semibold shadow-sm transition disabled:opacity-50 ${
+                    hideEmptyGroups
+                      ? "bg-blue-500 text-white hover:bg-blue-600"
+                      : "bg-white text-slate-500 hover:bg-slate-50"
+                  }`}
+                  title={hideEmptyGroups ? "显示全部容器" : "隐藏无任务容器"}
+                >
+                  {hideEmptyGroups ? <EyeOff size={14} /> : <Eye size={14} />}
+                  {hideEmptyGroups ? "显示全部" : "隐藏空"}
+                </button>
+                <button type="button" onClick={() => void load()} disabled={loading} className="inline-flex shrink-0 items-center gap-1 rounded-full bg-white px-3 py-1.5 text-sm font-semibold text-slate-600 shadow-sm transition hover:bg-slate-50 disabled:opacity-50"><RefreshCw size={14} className={loading ? "animate-spin" : ""} />刷新</button>
+              </div>
+            </div>
+            {loading ? (
+              <div className="mt-3 grid gap-2" style={{ gridTemplateColumns: `repeat(8, minmax(0, 1fr))` }}>
+                {[...Array(8)].map((_, i) => (
+                  <div key={i} className="flex flex-col items-center gap-1.5 rounded-xl bg-white py-2.5 shadow-sm">
+                    <div className="h-4 w-16 animate-pulse rounded-lg bg-slate-200" />
+                    <div className="h-3 w-20 animate-pulse rounded-full bg-slate-200" />
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="mt-3 grid gap-2" style={{ gridTemplateColumns: `repeat(${gridCols}, minmax(0, 1fr))` }}>
+                {visibleGroups.map((g) => {
+                  const isDaily = g.key === "daily";
+                  const isReminder = g.key === "reminder";
+                  const pendingCount = isReminder
+                    ? activeReminders.length
+                    : g.progress.total - g.progress.done;
+                  return (
+                    <div
+                      key={g.key}
+                      onClick={() => handleKpiClick(g.key, g.color)}
+                      className="relative flex cursor-pointer flex-col items-center gap-2 rounded-xl border border-slate-150/80 bg-white py-3 px-2 shadow-sm transition-all hover:shadow-md hover:border-slate-300 active:scale-95"
+                      title={`点击定位到「${g.label}」任务区域`}
+                    >
+                      {/* 右上角未完成角标 */}
+                      {pendingCount > 0 && (
+                        <span className="absolute top-1.5 right-1.5 flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-red-500 px-1 text-[10px] font-bold leading-none text-white shadow-sm">
+                          {pendingCount}
+                        </span>
+                      )}
+                      {/* 第一行：图标 + 名称 */}
+                      <div className="flex items-center gap-1">
+                        <span className={`flex h-5.5 w-5.5 shrink-0 items-center justify-center rounded-md ${g.bg} ${g.text}`}>{g.icon}</span>
+                        <span className="text-[13px] font-bold text-slate-700">{g.label}</span>
+                      </div>
+                      {/* 第二行：进度 / 统计 */}
+                      {isDaily ? (
+                        <span className={`rounded-full px-2.5 py-0.5 text-[12px] font-bold tabular-nums ${g.bg} ${g.text} shadow-sm`}>{g.progress.pct}%</span>
+                      ) : isReminder ? (
+                        <span className={`rounded-full px-2.5 py-0.5 text-[12px] font-bold tabular-nums ${g.bg} ${g.text} shadow-sm`}>共{activeReminders.length}件</span>
+                      ) : (
+                        <span className={`text-[12px] font-bold tabular-nums ${g.text}`}>
+                          共{g.progress.total} 未完成{pendingCount}
+                        </span>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
-          <button type="button" onClick={() => void load()} disabled={loading} className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-sm font-semibold text-slate-600 transition hover:bg-slate-50 disabled:opacity-50"><RefreshCw size={13} className={loading ? "animate-spin" : ""} />刷新</button>
-        </div>
-      </section>
+        );
+      })()}
 
       {loading ? (
         <div className="flex items-center justify-center py-20 text-slate-400"><RefreshCw size={20} className="mr-2 animate-spin" />加载中...</div>
       ) : (
         <>
-        <div className="grid items-start gap-3 xl:grid-cols-3">
+        <div className="columns-1 gap-3 xl:columns-3 space-y-3 [&>*]:break-inside-avoid">
 
-          {/* 厅管日常任务 — 固定占位第一格 */}
-          <TaskDashboardSection
+          {/* 厅管日常任务 — hideEmptyGroups 开启时，无数据则完全隐藏 */}
+          {(!hideEmptyGroups || visibleHallDailyRecords.length > 0) && (
+            <TaskDashboardSection
               icon={<Building2 size={18} />}
               title="厅管日常任务"
+              sectionKey="hallDaily"
+              isHighlighted={highlightedSection?.key === "hallDaily"}
+              highlightColor="#14b8a6"
+              onHighlightDone={handleHighlightDone}
               description={hallDailyRecordView === "today" ? "仅展示今天的厅管日常任务，未完成部分会在 23:59 后转入昨日补录。" : "仅展示昨天逾期未完成的任务，可在今天 16:00 前补录。"}
               count={visibleHallDailyRecords.length}
               pendingCount={visibleHallDailyRecords.filter((r) => r.status !== "submitted").length}
@@ -550,10 +724,15 @@ export function TaskDashboardPage() {
                 />
               ))}
             </TaskDashboardSection>
+          )}
 
           <TaskDashboardSection
             icon={<CheckCircle2 size={18} />}
             title="主播日常任务"
+            sectionKey="daily"
+            isHighlighted={highlightedSection?.key === "daily"}
+            highlightColor="#3b82f6"
+            onHighlightDone={handleHighlightDone}
             description={dailyRecordView === "today" ? "仅展示今天的主播日常任务，未完成部分会在 23:59 后转入昨日补录。" : "仅展示昨天逾期未完成的任务，可在今天 16:00 前补录。"}
             count={visibleDailyRecords.length}
             pendingCount={countPendingRecords(visibleDailyRecords)}
@@ -643,9 +822,18 @@ export function TaskDashboardPage() {
             hideStats
           >
             <div className="flex flex-col gap-2">
-              {temporarySubSections.map((section) => (
+              {temporarySubSections.map((section) => {
+                  const subColor =
+                    section.key === 'account' ? '#06b6d4' :
+                    section.key === 'anchor' ? '#10b981' :
+                    '#8b5cf6';
+                  return (
                 <SubSection
                   key={section.key}
+                  sectionKey={section.key}
+                  isHighlighted={highlightedSection?.key === section.key}
+                  highlightColor={subColor}
+                  onHighlightDone={handleHighlightDone}
                   tone={section.tone}
                   icon={section.icon}
                   title={section.title}
@@ -660,13 +848,18 @@ export function TaskDashboardPage() {
                   isRecordOverdue={isRecordOverdue}
                   currentIdentityId={"currentIdentityId" in section ? section.currentIdentityId : undefined}
                 />
-              ))}
+              );
+              })}
             </div>
           </TaskDashboardSection>
 
           <TaskDashboardSection
             icon={<Bell size={18} />}
             title="个人提醒"
+            sectionKey="reminder"
+            isHighlighted={highlightedSection?.key === "reminder"}
+            highlightColor="#eab308"
+            onHighlightDone={handleHighlightDone}
             description="仅自己可见的个人事项，不影响任务报表。"
             count={activeReminders.length}
             pendingCount={countPendingReminders(activeReminders)}
@@ -722,8 +915,8 @@ export function TaskDashboardPage() {
             </div>
           </TaskDashboardSection>
 
-          {/* 流转任务 — 第二行第二格 */}
-          {(() => {
+          {/* 流转任务 — hideEmptyGroups 开启时，无数据则完全隐藏 */}
+          {(!hideEmptyGroups || workflowTasks.length > 0) && (() => {
             const myPendingWorkflow = workflowTasks.filter((t) =>
               t.steps.some((s) => s.assigneeUserId === currentIdentity?.userId && s.status === "active")
             ).length;
@@ -737,6 +930,10 @@ export function TaskDashboardPage() {
               <TaskDashboardSection
                 icon={<GitBranch size={18} />}
                 title="流转任务"
+                sectionKey="workflow"
+                isHighlighted={highlightedSection?.key === "workflow"}
+                highlightColor="#6366f1"
+                onHighlightDone={handleHighlightDone}
                 description="展示进行中与已完成任务；到达截止时间后自动从此处移除"
                 count={workflowTasks.length}
                 pendingCount={myPendingWorkflow}
@@ -784,8 +981,8 @@ export function TaskDashboardPage() {
             );
           })()}
 
-          {/* 厅内直达任务 — 第二行第三格 */}
-          {(() => {
+          {/* 厅内直达任务 — hideEmptyGroups 开启时，无数据则完全隐藏 */}
+          {(!hideEmptyGroups || broadcastTasks.length > 0) && (() => {
             const pendingBroadcast = broadcastTasks.filter((t) => t.myRecord.status !== "submitted" && t.myRecord.status !== "overdue").length;
             const submittedBroadcast = broadcastTasks.filter((t) => t.myRecord.status === "submitted").length;
             const overdueBroadcast = broadcastTasks.filter((t) => t.myRecord.status === "overdue").length;
@@ -793,6 +990,10 @@ export function TaskDashboardPage() {
               <TaskDashboardSection
                 icon={<Megaphone size={18} />}
                 title="厅内直达任务"
+                sectionKey="broadcast"
+                isHighlighted={highlightedSection?.key === "broadcast"}
+                highlightColor="#f97316"
+                onHighlightDone={handleHighlightDone}
                 description="由厅管理员群发的直达任务，逐题填写后提交"
                 count={broadcastTasks.length}
                 pendingCount={pendingBroadcast}

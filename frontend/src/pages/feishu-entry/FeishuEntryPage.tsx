@@ -1,7 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import type { Identity } from "../../types";
 import { useAuthStore } from "../../stores/authStore";
+import { useIdentityStore } from "../../stores/identityStore";
 import { getFeishuAuthCode, isInFeishuApp } from "../../shared/utils/feishu";
+import { COCKPIT_ROLES, pickBestIdentity } from "../../shared/utils/identity";
 
 /**
  * 飞书免登中转页
@@ -19,6 +22,7 @@ import { getFeishuAuthCode, isInFeishuApp } from "../../shared/utils/feishu";
 export function FeishuEntryPage() {
   const navigate = useNavigate();
   const setAuth = useAuthStore((s) => s.setAuth);
+  const setIdentity = useIdentityStore((s) => s.setIdentity);
   const [status, setStatus] = useState<"loading" | "error">("loading");
   const [errorMsg, setErrorMsg] = useState("");
   const ran = useRef(false);
@@ -83,7 +87,14 @@ export function FeishuEntryPage() {
         // 保存 appId 供退出重登、token 过期重登使用
         localStorage.setItem("feishu_entry_app_id", appId);
         setAuth(loginJson.data as Parameters<typeof setAuth>[0]);
-        navigate("/tasks/cockpit", { replace: true });
+        const identities = (loginJson.data as { identities: Identity[] }).identities ?? [];
+        const best = pickBestIdentity(identities);
+        if (best) {
+          setIdentity(best);
+          navigate(COCKPIT_ROLES.includes(best.roleCode) ? "/tasks/cockpit" : "/tasks/dashboard", { replace: true });
+        } else {
+          navigate("/identity", { replace: true });
+        }
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : "未知错误";
         console.error("[FeishuEntryPage] 免登失败:", msg);

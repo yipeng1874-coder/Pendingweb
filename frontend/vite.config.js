@@ -63,4 +63,14 @@ export default defineConfig({
             "/uploads": "http://127.0.0.1:4000",
         },
     },
+    build: {
+        chunkSizeWarningLimit: 600,
+        rollupOptions: {
+            output: {
+                manualChunks: {
+                    recharts: ["recharts"],
+                },
+            },
+        },
+    },
 });

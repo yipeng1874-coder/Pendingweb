@@ -19,6 +19,11 @@ import { workflowTaskRoutes } from "./modules/task/collaboration/workflow.routes
 import { broadcastTaskRoutes } from "./modules/task/collaboration/broadcast.routes.js";
 import { hallDailyRoutes } from "./modules/task/hall-daily/hall-daily.routes.js";
 import { anchorSummaryRoutes } from "./modules/anchor-summary/anchor-summary.routes.js";
+import { hallSummaryRoutes } from "./modules/hall-summary/hall-summary.routes.js";
+import { anchorLossSummaryRoutes } from "./modules/anchor-loss-summary/anchor-loss-summary.routes.js";
+import { dataOverviewRoutes } from "./modules/data-overview/data-overview.routes.js";
+import { liveRoomCapacityRoutes } from "./modules/live-room-capacity/live-room-capacity.routes.js";
+import { anchorAvgWaveRoutes } from "./modules/anchor-avg-wave/anchor-avg-wave.routes.js";
 import { fail } from "./shared/response.js";
 
 export function createApp() {
@@ -51,6 +56,11 @@ export function createApp() {
   app.use("/api", broadcastTaskRoutes);
   app.use("/api", hallDailyRoutes);
   app.use("/api", anchorSummaryRoutes);
+  app.use("/api", hallSummaryRoutes);
+  app.use("/api", anchorLossSummaryRoutes);
+  app.use("/api", dataOverviewRoutes);
+  app.use("/api", liveRoomCapacityRoutes);
+  app.use("/api", anchorAvgWaveRoutes);
 
   app.use((_req, res) => fail(res, "NOT_FOUND", "接口不存在", 404));
   return app;

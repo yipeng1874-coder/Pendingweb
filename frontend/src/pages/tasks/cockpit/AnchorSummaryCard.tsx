@@ -1,209 +1,401 @@
-import { useEffect, useRef, useState } from "react";
-import { Users, Upload, RefreshCw, Calendar, User } from "lucide-react";
-import { anchorSummaryApi, type AnchorDailySummary, type OperatorStat } from "../../../services/task";
+import { useEffect, useRef, useState, useMemo } from "react";
+import { Users, RefreshCw, TrendingUp } from "lucide-react";
+import { anchorSummaryApi, type AnchorTrendResponse, type AnchorTrendPoint, type AnchorDailySummary, type OperatorStat } from "../../../services/task";
 import { useIdentityStore } from "../../../stores/identityStore";
-import { Toast } from "../../../shared/components/Toast";
+import {
+  ComposedChart,
+  Bar,
+  Line,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  Legend,
+  ResponsiveContainer,
+} from "recharts";
 
 interface Props {
   scopeOrgId?: string;
 }
 
+/** 格式化 MM-DD */
+function fmtMD(dateStr: string): string {
+  const parts = dateStr.split("-");
+  return `${parts[1]}-${parts[2]}`;
+}
+
+const CHART_COLORS = {
+  online: "#10b981",
+  offline: "#94a3b8",
+  total: "#3b82f6",
+  dailyNew: "#f59e0b",
+};
+
 export function AnchorSummaryCard({ scopeOrgId }: Props) {
   const { currentIdentity } = useIdentityStore();
-  const [summary, setSummary] = useState<AnchorDailySummary | null>(null);
+  const [trend, setTrend] = useState<AnchorTrendResponse | null>(null);
   const [loading, setLoading] = useState(false);
-  const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [toast, setToast] = useState<{ message: string; type: "success" | "error" } | null>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // 只有 BASE_ADMIN 以上才能上传
-  const canUpload =
-    currentIdentity &&
-    ["DEV_ADMIN", "HQ_ADMIN", "BASE_ADMIN"].includes(currentIdentity.roleCode);
+  // 运营明细弹窗状态
+  const [operatorDialogOpen, setOperatorDialogOpen] = useState(false);
 
-  const load = (sid?: string) => {
+  // 运营明细悬停状态：当前悬停的字段（null = 无）
+  const [hoveredField, setHoveredField] = useState<"total" | "within7" | "within20" | null>(null);
+
+  // 三张卡片的 DOM 引用，用于浮层定位
+  const totalCardRef = useRef<HTMLDivElement>(null);
+  const within7CardRef = useRef<HTMLDivElement>(null);
+  const within20CardRef = useRef<HTMLDivElement>(null);
+  const [popoverPos, setPopoverPos] = useState<{ top: number; left: number; height: number } | null>(null);
+
+  /** 计算浮层位置（出现在悬停卡片左侧） */
+  const updatePopoverPos = (field: "total" | "within7" | "within20") => {
+    const refMap = {
+      total: totalCardRef,
+      within7: within7CardRef,
+      within20: within20CardRef,
+    };
+    const el = refMap[field].current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    setPopoverPos({
+      top: rect.top,
+      left: rect.left,
+      height: rect.height,
+    });
+  };
+
+  const loadTrend = (sid?: string) => {
     setLoading(true);
     setError(null);
     anchorSummaryApi
-      .getLatest(sid ?? scopeOrgId)
-      .then((data) => setSummary(data))
+      .getTrend(sid ?? scopeOrgId, 7)
+      .then((data) => setTrend(data))
       .catch((e) => setError(e?.message ?? "加载失败"))
       .finally(() => setLoading(false));
   };
 
   useEffect(() => {
-    load();
+    loadTrend();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scopeOrgId]);
 
-  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    // 重置 input 以允许再次上传同名文件
-    e.target.value = "";
-    setUploading(true);
-    setError(null);
-    try {
-      const result = await anchorSummaryApi.upload(file, scopeOrgId);
-      setSummary(result);
-      setToast({ message: "上传成功，数据已更新", type: "success" });
-    } catch (err: any) {
-      const msg = err?.message ?? "上传失败";
-      setError(msg);
-      setToast({ message: msg, type: "error" });
-    } finally {
-      setUploading(false);
+  // 监听全局事件，从统一上传弹窗上传后刷新
+  useEffect(() => {
+    const handler = () => loadTrend();
+    window.addEventListener("anchor-summary-refresh", handler);
+    return () => window.removeEventListener("anchor-summary-refresh", handler);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const latest: AnchorDailySummary | null = trend?.latest ?? null;
+
+  // 趋势数据：补齐缺失日期（连续 7 天）
+  const chartData = useMemo(() => {
+    const points = trend?.points ?? [];
+    if (points.length === 0) return [];
+    const lastDate = new Date(points[points.length - 1].recordDate);
+    const result: Array<AnchorTrendPoint & { label: string }> = [];
+    const map = new Map(points.map((p) => [p.recordDate, p]));
+    for (let i = 6; i >= 0; i--) {
+      const d = new Date(lastDate);
+      d.setDate(d.getDate() - i);
+      const ds = d.toISOString().slice(0, 10);
+      const existing = map.get(ds);
+      result.push({
+        recordDate: ds,
+        label: fmtMD(ds),
+        totalCount: existing?.totalCount ?? 0,
+        onlineCount: existing?.onlineCount ?? 0,
+        offlineCount: existing?.offlineCount ?? 0,
+        within7Days: existing?.within7Days ?? 0,
+        within20Days: existing?.within20Days ?? 0,
+        dailyNew: existing?.dailyNew ?? 0,
+      });
     }
-  };
+    return result;
+  }, [trend]);
 
   return (
     <>
-      {toast && (
-        <Toast
-          message={toast.message}
-          type={toast.type}
-          duration={toast.type === "error" ? 5000 : 3000}
-          onClose={() => setToast(null)}
-        />
-      )}
-    <div className="rounded-2xl border border-slate-100 bg-white shadow-sm overflow-hidden">
-      {/* 标题行 */}
-      <div className="flex items-center gap-3 px-5 h-14 border-b border-slate-100">
-        {/* 左：图标 + 标题（第一行）+ 日期/上传者（第二行） */}
-        <div className="flex items-center gap-2 shrink-0">
-          <Users size={16} className="text-feishu-blue shrink-0" />
-          <div className="flex flex-col gap-0.5">
-            <span className="text-[14px] font-semibold text-slate-700 leading-none">
-              {summary?.baseOrgName
-                ? `${summary.baseOrgName} · 主播汇总`
-                : "基地主播汇总"}
+      <div className="rounded-2xl border border-slate-100 bg-white shadow-sm overflow-hidden">
+        {/* ── 标题行 ── */}
+        <div className="flex items-center gap-3 px-5 h-14 border-b border-slate-100">
+          <div className="flex items-center gap-2 shrink-0">
+            <TrendingUp size={16} className="text-feishu-blue shrink-0" />
+            <span className="text-[14px] font-semibold text-slate-700">
+              {trend?.baseOrgName
+                ? `${trend.baseOrgName} · 7日主播数量趋势`
+                : "基地主播数量趋势"}
             </span>
-            {summary && (
-              <div className="flex items-center gap-2">
-                <span className="flex items-center gap-1 text-[11px] text-slate-400">
-                  <Calendar size={10} />
-                  {summary.uploadDate}
-                </span>
-                <span className="flex items-center gap-1 text-[11px] text-slate-400">
-                  <User size={10} />
-                  {summary.uploaderName}
+            {latest && latest.operatorStats && (latest.operatorStats as OperatorStat[]).length > 0 && (
+              <span className="text-[12px] font-medium text-slate-500 hidden sm:inline">
+                · 运营明细：共 {(latest.operatorStats as OperatorStat[]).length} 人
+                <span className="text-slate-300 font-normal ml-1">（鼠标悬停右侧卡片查看）</span>
+              </span>
+            )}
+          </div>
+
+          {/* 右侧操作区 */}
+          <div className="flex items-center gap-2 ml-auto shrink-0">
+            {error && <span className="text-[11px] text-red-500 mr-1">{error}</span>}
+
+            {latest && (
+              <span className="text-[10px] text-slate-300 mr-1 hidden sm:inline">
+                上传者：{latest.uploaderName} · {latest.rawRowCount} 行
+              </span>
+            )}
+
+            {latest && (
+              <div className="flex items-center gap-1.5 mr-1">
+                <span className="text-[11px] text-slate-400">最新数据</span>
+                <span className="text-[12px] font-medium text-slate-600 tabular-nums">
+                  {latest.recordDate}
                 </span>
               </div>
             )}
+
+            <button
+              onClick={() => loadTrend()}
+              disabled={loading}
+              title="刷新"
+              className="flex items-center justify-center w-7 h-7 rounded-lg border border-slate-200 bg-white text-slate-500 hover:bg-slate-50 disabled:opacity-50 transition-colors"
+            >
+              <RefreshCw size={13} className={loading ? "animate-spin" : ""} />
+            </button>
           </div>
         </div>
 
-        {/* 中：合计数据一行（flex-1 撑开） */}
-        {summary && (
-          <div className="flex items-center gap-x-3 flex-1 justify-center">
-            <StatItem label="合计" value={summary.totalCount} color="text-slate-700" small />
-            <StatItem label="线上" value={summary.onlineCount} color="text-emerald-600" small />
-            <StatItem label="线下" value={summary.offlineCount} color="text-slate-400" small />
-            <div className="h-3 w-px bg-slate-200" />
-            <StatItem label="7天内" value={summary.within7Days} color="text-amber-600" small />
-            <StatItem label="30天内" value={summary.within30Days} color="text-blue-500" small />
+        {/* ── 内容区 ── */}
+        {loading && !trend ? (
+          <div className="flex items-center justify-center py-20">
+            <div className="space-y-4 w-full max-w-lg">
+              <div className="h-48 animate-pulse rounded-xl bg-slate-100" />
+            </div>
+          </div>
+        ) : !trend || trend.points.length === 0 ? (
+          <div className="flex flex-col items-center justify-center py-16 text-slate-400 gap-2">
+            <Users size={32} className="text-slate-200" />
+            <p className="text-[13px]">暂无数据，请通过「上传数据 → 主播数据表」录入</p>
+          </div>
+        ) : (
+          <div className="flex gap-0">
+            {/* ── 左侧：趋势图（占 2/3） ── */}
+            <div className="flex-[2] px-5 pt-4 pb-3 border-r border-slate-100">
+              <ResponsiveContainer width="100%" height={280}>
+                <ComposedChart data={chartData} margin={{ top: 5, right: 10, left: -10, bottom: 5 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+                  <XAxis
+                    dataKey="label"
+                    tick={{ fontSize: 11, fill: "#94a3b8" }}
+                    axisLine={{ stroke: "#e2e8f0" }}
+                    tickLine={false}
+                  />
+                  <YAxis
+                    tick={{ fontSize: 11, fill: "#94a3b8" }}
+                    axisLine={false}
+                    tickLine={false}
+                    allowDecimals={false}
+                  />
+                  <Tooltip
+                    contentStyle={{
+                      borderRadius: 12,
+                      border: "1px solid #e2e8f0",
+                      boxShadow: "0 8px 24px rgba(0,0,0,0.08)",
+                      fontSize: 12,
+                      padding: "10px 14px",
+                    }}
+                    labelFormatter={(label) => `日期: ${label}`}
+                  />
+                  <Legend
+                    wrapperStyle={{ fontSize: 12, paddingTop: 8 }}
+                    iconType="rect"
+                    iconSize={8}
+                  />
+                  <Bar
+                    dataKey="onlineCount"
+                    name="线上主播"
+                    fill={CHART_COLORS.online}
+                    radius={[4, 4, 0, 0]}
+                    barSize={20}
+                  />
+                  <Bar
+                    dataKey="offlineCount"
+                    name="线下主播"
+                    fill={CHART_COLORS.offline}
+                    radius={[4, 4, 0, 0]}
+                    barSize={20}
+                  />
+                  <Line
+                    type="monotone"
+                    dataKey="totalCount"
+                    name="主播总数"
+                    stroke={CHART_COLORS.total}
+                    strokeWidth={2.5}
+                    dot={{ r: 4, fill: CHART_COLORS.total, strokeWidth: 2, stroke: "#fff" }}
+                    activeDot={{ r: 6 }}
+                  />
+                  <Line
+                    type="monotone"
+                    dataKey="dailyNew"
+                    name="当日新增"
+                    stroke={CHART_COLORS.dailyNew}
+                    strokeWidth={2}
+                    dot={{ r: 3, fill: CHART_COLORS.dailyNew, strokeWidth: 1.5, stroke: "#fff" }}
+                    activeDot={{ r: 5 }}
+                  />
+                </ComposedChart>
+              </ResponsiveContainer>
+            </div>
+
+            {/* ── 右侧：最新日期统计卡片 ── */}
+            <div className="flex-1 px-4 py-2 flex flex-col justify-center gap-1.5">
+              {latest && (
+                <>
+                  <div ref={totalCardRef}>
+                    <BigStatCard
+                      label="主播总数"
+                      value={latest.totalCount}
+                      sub={`线上 ${latest.onlineCount} · 线下 ${latest.offlineCount}`}
+                      color="text-feishu-blue"
+                      bg="bg-blue-50"
+                      interactive
+                      active={hoveredField === "total"}
+                      onHoverChange={(active) => {
+                        if (active) {
+                          updatePopoverPos("total");
+                          setHoveredField("total");
+                        } else {
+                          setHoveredField((prev) => (prev === "total" ? null : prev));
+                        }
+                      }}
+                    />
+                  </div>
+                  <div ref={within7CardRef}>
+                    <BigStatCard
+                      label="7天内新增"
+                      value={latest.within7Days}
+                      sub={`占总人数 ${latest.totalCount > 0 ? ((latest.within7Days / latest.totalCount) * 100).toFixed(1) : 0}%`}
+                      color="text-amber-600"
+                      bg="bg-orange-50"
+                      interactive
+                      active={hoveredField === "within7"}
+                      onHoverChange={(active) => {
+                        if (active) {
+                          updatePopoverPos("within7");
+                          setHoveredField("within7");
+                        } else {
+                          setHoveredField((prev) => (prev === "within7" ? null : prev));
+                        }
+                      }}
+                    />
+                  </div>
+                  <div ref={within20CardRef}>
+                    <BigStatCard
+                      label="20天内新增"
+                      value={latest.within20Days}
+                      sub={`占总人数 ${latest.totalCount > 0 ? ((latest.within20Days / latest.totalCount) * 100).toFixed(1) : 0}%`}
+                      color="text-blue-500"
+                      bg="bg-sky-50"
+                      interactive
+                      active={hoveredField === "within20"}
+                      onHoverChange={(active) => {
+                        if (active) {
+                          updatePopoverPos("within20");
+                          setHoveredField("within20");
+                        } else {
+                          setHoveredField((prev) => (prev === "within20" ? null : prev));
+                        }
+                      }}
+                    />
+                  </div>
+                </>
+              )}
+            </div>
           </div>
         )}
 
-        {/* 右：错误提示 + 图标按钮 */}
-        <div className="flex items-center gap-1.5 shrink-0">
-          {error && <span className="text-[11px] text-red-500 mr-1">{error}</span>}
-          <button
-            onClick={() => load()}
-            disabled={loading}
-            title="刷新"
-            className="flex items-center justify-center w-7 h-7 rounded-lg border border-slate-200 bg-white text-slate-500 hover:bg-slate-50 disabled:opacity-50 transition-colors"
-          >
-            <RefreshCw size={13} className={loading ? "animate-spin" : ""} />
-          </button>
-          {canUpload && (
-            <>
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept=".xlsx,.xls"
-                className="hidden"
-                onChange={handleFileChange}
-              />
-              <button
-                onClick={() => fileInputRef.current?.click()}
-                disabled={uploading}
-                title="上传表格"
-                className="flex items-center justify-center w-7 h-7 rounded-lg bg-feishu-blue text-white hover:opacity-90 disabled:opacity-50 transition-opacity"
-              >
-                <Upload size={13} className={uploading ? "animate-pulse" : ""} />
-              </button>
-            </>
-          )}
-        </div>
+        {/* ── 底部：运营明细已移至标题旁（节省高度） ── */}
       </div>
 
-      {/* 内容区 */}
-      {loading && !summary ? (
-        // Skeleton
-        <div className="space-y-0 divide-y divide-slate-50">
-          {[...Array(4)].map((_, i) => (
-            <div key={i} className="px-5 py-4">
-              <div className="h-4 w-full animate-pulse rounded bg-slate-100" />
-            </div>
-          ))}
-        </div>
-      ) : !summary ? (
-        <div className="flex flex-col items-center justify-center py-14 text-slate-400 gap-2">
-          <Users size={32} className="text-slate-200" />
-          <p className="text-[13px]">暂无数据，请上传主播信息表</p>
-        </div>
-      ) : (
-        <div>
-          {/* 运营明细（全部展开，无折叠） */}
-          <div className="divide-y divide-slate-50">
-            {(summary.operatorStats as OperatorStat[]).map((op) => (
-              <OperatorRow key={op.name} op={op} />
-            ))}
-          </div>
-        </div>
+      {/* ── 运营明细浮层（悬停显示，贴在悬停卡片左侧） ── */}
+      {hoveredField && popoverPos && latest && (latest.operatorStats as OperatorStat[])?.length > 0 && (
+        <OperatorPopover
+          field={hoveredField}
+          recordDate={latest.recordDate}
+          operators={latest.operatorStats as OperatorStat[]}
+          pos={popoverPos}
+        />
       )}
-    </div>
     </>
   );
 }
 
-function StatItem({
+/** 大号统计卡片 */
+function BigStatCard({
   label,
   value,
+  sub,
   color,
-  small,
+  bg,
+  interactive = false,
+  active = false,
+  onHoverChange,
 }: {
   label: string;
   value: number;
+  sub: string;
   color: string;
-  small?: boolean;
+  bg: string;
+  interactive?: boolean;
+  active?: boolean;
+  onHoverChange?: (active: boolean) => void;
 }) {
   return (
-    <div className="flex items-baseline gap-0.5">
-      <span className={`${small ? "text-[10px]" : "text-[11px]"} text-slate-400`}>{label}</span>
-      <span className={`${small ? "text-[13px]" : "text-[18px]"} font-bold tabular-nums leading-none ${color}`}>{value}</span>
+    <div
+      className={`rounded-xl ${bg} px-3 py-2 transition-all ${
+        interactive ? "cursor-pointer" : ""
+      } ${active ? "ring-2 ring-feishu-blue shadow-md scale-[1.01]" : ""}`}
+      onMouseEnter={interactive ? () => onHoverChange?.(true) : undefined}
+      onMouseLeave={interactive ? () => onHoverChange?.(false) : undefined}
+    >
+      <div className="flex items-center justify-between gap-2">
+        <p className="text-[13px] font-semibold text-slate-600">{label}</p>
+        <p className="text-[13px] font-semibold text-slate-700 tabular-nums">{sub}</p>
+      </div>
+      <p className={`text-[30px] font-extrabold leading-none tabular-nums ${color} mt-1`}>{value}</p>
     </div>
   );
 }
 
+/** 迷你统计标签（已弃用：与右侧大卡片重复，删除） */
+// function MiniStat({ label, value, color }: { label: string; value: number; color: string }) {
+//   return (
+//     <div className="flex items-baseline gap-1">
+//       <span className="text-[11px] text-slate-400">{label}</span>
+//       <span className={`text-[15px] font-bold tabular-nums leading-none ${color}`}>{value}</span>
+//     </div>
+//   );
+// }
+
+
+
+/** 运营行 */
 function OperatorRow({ op }: { op: OperatorStat }) {
   const total = op.onlineCount + op.offlineCount;
   const onlinePct = total > 0 ? Math.round((op.onlineCount / total) * 100) : 0;
   const offlinePct = total > 0 ? 100 - onlinePct : 0;
 
   return (
-    <div className="flex items-center gap-3 px-5 h-11 hover:bg-slate-50 transition-colors overflow-hidden">
-      {/* 运营名 */}
-      <span className="w-16 shrink-0 text-[13px] font-medium text-slate-600 truncate" title={op.name}>
+    <div className="flex items-center gap-3 px-5 h-10 hover:bg-slate-50 transition-colors overflow-hidden">
+      <span className="w-16 shrink-0 text-[12px] font-medium text-slate-600 truncate" title={op.name}>
         {op.name}
       </span>
 
-      {/* PK 进度条（撑开中间） */}
       {total > 0 ? (
         <div className="flex items-center gap-1.5 flex-1 min-w-0">
-          <span className="text-[11px] text-red-400 tabular-nums shrink-0 whitespace-nowrap">线下 {offlinePct}%</span>
+          <span className="text-[10px] text-red-400 tabular-nums shrink-0 whitespace-nowrap">线下 {offlinePct}%</span>
           <div className="flex-1 h-1.5 rounded-full overflow-hidden flex min-w-0">
             <div
               className="h-full bg-gradient-to-r from-red-400 to-red-300 transition-all duration-500"
@@ -214,29 +406,89 @@ function OperatorRow({ op }: { op: OperatorStat }) {
               style={{ width: `${onlinePct}%` }}
             />
           </div>
-          <span className="text-[11px] text-blue-400 tabular-nums shrink-0 whitespace-nowrap">线上 {onlinePct}%</span>
+          <span className="text-[10px] text-blue-400 tabular-nums shrink-0 whitespace-nowrap">线上 {onlinePct}%</span>
         </div>
       ) : (
         <div className="flex-1" />
       )}
 
-      {/* 各项数据 */}
-      <div className="flex items-center gap-2 shrink-0 whitespace-nowrap">
-        <span className="text-[12px] text-slate-500 tabular-nums">
+      <div className="flex items-center gap-2 shrink-0 whitespace-nowrap text-[11px]">
+        <span className="text-slate-500 tabular-nums">
           合计 <strong className="text-slate-700">{op.totalCount}</strong>
         </span>
-        <span className="text-[12px] text-emerald-600 tabular-nums">
+        <span className="text-emerald-600 tabular-nums">
           线上 <strong>{op.onlineCount}</strong>
         </span>
-        <span className="text-[12px] text-slate-400 tabular-nums">
+        <span className="text-slate-400 tabular-nums">
           线下 <strong>{op.offlineCount}</strong>
         </span>
-        <span className="text-[12px] text-amber-500 tabular-nums">
+        <span className="text-amber-600 tabular-nums">
           7天 <strong>{op.within7Days}</strong>
         </span>
-        <span className="text-[12px] text-blue-400 tabular-nums">
-          30天 <strong>{op.within30Days}</strong>
+        <span className="text-blue-400 tabular-nums">
+          20天 <strong>{op.within20Days}</strong>
         </span>
+      </div>
+    </div>
+  );
+}
+
+/** 运营明细浮层（悬停显示，固定在悬停卡片左侧） */
+function OperatorPopover({
+  field,
+  recordDate,
+  operators,
+  pos,
+}: {
+  field: "total" | "within7" | "within20";
+  recordDate: string;
+  operators: OperatorStat[];
+  pos: { top: number; left: number; height: number };
+}) {
+  // 根据悬停字段选择排序键
+  const sorted = [...operators].sort((a, b) => {
+    if (field === "total") return b.totalCount - a.totalCount;
+    if (field === "within7") return b.within7Days - a.within7Days;
+    return b.within20Days - a.within20Days;
+  });
+
+  const titleMap = {
+    total: "运营明细 · 按总数排序",
+    within7: "7天内新增 · 按新增数排序",
+    within20: "20天内新增 · 按新增数排序",
+  };
+
+  // 浮层宽度
+  const POPOVER_WIDTH = 560;
+  // 浮层与卡片右边缘的间距
+  const GAP = 12;
+  // 浮层顶部与卡片顶部对齐
+  const top = pos.top;
+  // 浮层左侧 = 卡片左侧 - 浮层宽度 - 间距
+  const left = pos.left - POPOVER_WIDTH - GAP;
+
+  return (
+    <div
+      className="fixed z-50 rounded-xl bg-white overflow-hidden border-2 border-slate-300"
+      style={{
+        top,
+        left: Math.max(12, left),
+        width: POPOVER_WIDTH,
+        boxShadow: "0 12px 32px rgba(15, 23, 42, 0.18)",
+      }}
+    >
+      <div className="flex items-center justify-between px-4 py-2 border-b border-slate-200 bg-slate-50">
+        <div className="flex items-center gap-2">
+          <span className="text-[13px] font-semibold text-slate-700">{titleMap[field]}</span>
+          <span className="text-[11px] text-slate-500">
+            归属日期 {recordDate} · 共 {operators.length} 人
+          </span>
+        </div>
+      </div>
+      <div className="max-h-[320px] overflow-y-auto divide-y divide-slate-100">
+        {sorted.map((op) => (
+          <OperatorRow key={op.name} op={op} />
+        ))}
       </div>
     </div>
   );

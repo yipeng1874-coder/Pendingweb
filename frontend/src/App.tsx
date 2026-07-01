@@ -71,8 +71,8 @@ export default function App() {
           <Route path="/anchor-accounts" element={<RoleProtected roles={["DEV_ADMIN", "HQ_ADMIN", "BASE_ADMIN", "TEAM_ADMIN", "HALL_MANAGER"]} permissions={["anchor:view"]}><AnchorAccountsPage /></RoleProtected>} />
           <Route path="/anchors" element={<Navigate to="/anchor-accounts" replace />} />
           {/* 待办任务模块 */}
-          <Route path="/tasks" element={<Navigate to="/tasks/cockpit" replace />} />
-          <Route path="/tasks/cockpit" element={<CockpitPage />} />
+          <Route path="/tasks" element={<Navigate to="/tasks/dashboard" replace />} />
+          <Route path="/tasks/cockpit" element={<RoleProtected roles={["DEV_ADMIN", "HQ_ADMIN", "BASE_ADMIN", "TEAM_ADMIN"]} permissions={["task:report:view"]}><CockpitPage /></RoleProtected>} />
           <Route path="/tasks/dashboard" element={<TaskDashboardPage />} />
           <Route path="/tasks/dashboard/daily-board" element={<RoleProtected roles={["DEV_ADMIN", "HQ_ADMIN", "BASE_ADMIN", "TEAM_ADMIN", "HALL_MANAGER"]} permissions={["task:report:view"]}><DailyTaskDashboardPage /></RoleProtected>} />
           <Route path="/tasks/dashboard/hall-daily-board" element={<RoleProtected roles={["DEV_ADMIN", "HQ_ADMIN", "BASE_ADMIN", "TEAM_ADMIN", "HALL_MANAGER"]} permissions={["task:report:view"]}><HallDailyDashboardPage /></RoleProtected>} />

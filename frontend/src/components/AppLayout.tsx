@@ -168,12 +168,26 @@ function AnchorNavGroup({ collapsed, onExpandRequest }: { collapsed: boolean; on
 
 function TaskNavGroup({ collapsed, onExpandRequest }: { collapsed: boolean; onExpandRequest: () => void }) {
   const location = useLocation();
-  const isChildActive = taskSubItems.some((item) => location.pathname.startsWith(item.to));
+  const currentRoleCode = useIdentityStore((state) => state.currentIdentity?.roleCode);
+  const permissions = useIdentityStore((state) => state.permissions);
+
+  const visibleItems = taskSubItems.filter((item) => {
+    if (item.to === "/tasks/cockpit") {
+      return Boolean(currentRoleCode && ["DEV_ADMIN", "HQ_ADMIN", "BASE_ADMIN", "TEAM_ADMIN"].includes(currentRoleCode))
+        && (permissions.includes("*") || permissions.includes("task:report:view"));
+    }
+    return true;
+  });
+
+  const isChildActive = visibleItems.some((item) => location.pathname.startsWith(item.to));
   const [open, setOpen] = useState(isChildActive);
 
   useEffect(() => {
     if (isChildActive) setOpen(true);
   }, [isChildActive]);
+
+  // 无可见项时隐藏整个分组
+  if (visibleItems.length === 0) return null;
 
   return (
     <div className="space-y-1">
@@ -195,7 +209,7 @@ function TaskNavGroup({ collapsed, onExpandRequest }: { collapsed: boolean; onEx
       </button>
       {!collapsed && open && (
         <div className="mt-1 flex flex-col gap-1 pl-4">
-          {taskSubItems.map((item) => {
+          {visibleItems.map((item) => {
             const Icon = item.icon;
             return (
               <NavLink
@@ -450,7 +464,7 @@ export function AppLayout() {
           </NavLink>
         </div>
       </aside>
-      <main className={`pt-[72px] transition-all duration-300 ${sidebarCollapsed ? "pl-20" : "pl-60"}`}>
+      <main className={`relative z-0 pt-[72px] transition-all duration-300 ${sidebarCollapsed ? "pl-20" : "pl-60"}`}>
         <div className="p-6">
           <Outlet />
         </div>

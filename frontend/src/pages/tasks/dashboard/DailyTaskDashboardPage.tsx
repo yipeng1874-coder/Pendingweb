@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { Bell, ChevronDown, ChevronRight, Clock3, Loader2, RefreshCw, X } from "lucide-react";
 
 import type { DailyDashboardAnchorItemDetailResponse, DailyDashboardHallDetailsResponse, DailyDashboardOrgNode, DailyDashboardResponse, DailyDashboardTeamChildrenResponse, Identity, OrgUnit } from "../../../types";
@@ -381,9 +382,13 @@ function NodeSummary({ node, children = [], level = 0, taskDate, scopeOrgId, def
 export function DailyTaskDashboardPage() {
   const currentIdentity = useIdentityStore((state) => state.currentIdentity);
   const identityVersion = useIdentityStore((state) => state.identityVersion);
+  const [searchParams, setSearchParams] = useSearchParams();
   const [orgs, setOrgs] = useState<OrgUnit[]>([]);
-  const [taskDate, setTaskDate] = useState("");
-  const [selectedBaseOrgId, setSelectedBaseOrgId] = useState("");
+  // 从 URL 读取进入看板时传入的日期和基地（来自"全局仪表台"等入口）
+  const initialTaskDate = searchParams.get("taskDate") || "";
+  const initialBaseOrgId = searchParams.get("scopeOrgId") || "";
+  const [taskDate, setTaskDate] = useState(initialTaskDate);
+  const [selectedBaseOrgId, setSelectedBaseOrgId] = useState(initialBaseOrgId);
   const [data, setData] = useState<DailyDashboardResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -526,6 +531,8 @@ export function DailyTaskDashboardPage() {
               onChange={(event) => {
                 const newDate = event.target.value;
                 setTaskDate(newDate);
+                // 用户主动改日期后清掉 URL 上来自外部入口的锚点
+                if (searchParams.get("taskDate")) setSearchParams({}, { replace: true });
                 if (newDate) void load(newDate, selectedBaseOrgId || undefined);
               }}
               className="h-11 min-w-[210px] rounded-2xl border border-slate-200 bg-white px-4 text-sm text-slate-700 outline-none transition focus:border-blue-400"
@@ -535,6 +542,7 @@ export function DailyTaskDashboardPage() {
               onChange={(event) => {
                 const newId = event.target.value;
                 setSelectedBaseOrgId(newId);
+                if (searchParams.get("scopeOrgId")) setSearchParams({}, { replace: true });
                 void load(taskDate || undefined, newId || undefined);
               }}
               disabled={!baseSelectionRequired}

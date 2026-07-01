@@ -151,22 +151,99 @@ model AnchorProfile {
 
 model AnchorDailySummary {
   id            String   @id @default(uuid())
-  baseOrgId     String   @unique @map("base_org_id")
+  baseOrgId     String   @map("base_org_id")
   baseOrgName   String   @map("base_org_name")
-  uploadDate    String   @map("upload_date")
+  recordDate    String   @map("record_date")
   uploadedBy    String   @map("uploaded_by")
   uploaderName  String   @map("uploader_name")
   totalCount    Int      @map("total_count")
   onlineCount   Int      @map("online_count")
   offlineCount  Int      @map("offline_count")
   within7Days   Int      @map("within_7_days")
-  within30Days  Int      @map("within_30_days")
+  within20Days  Int      @default(0) @map("within_20_days")
+  dailyNew      Int      @default(0) @map("daily_new")
   operatorStats Json     @map("operator_stats")
   rawRowCount   Int      @map("raw_row_count")
   createdAt     DateTime @default(now()) @map("created_at")
   updatedAt     DateTime @updatedAt @map("updated_at")
 
+  @@unique([baseOrgId, recordDate])
   @@map("anchor_daily_summaries")
+}
+
+// 厅个数每日快照（用于"有效厅/训练厅"KPI + 按运营账号分组）
+model HallDailySummary {
+  id              String   @id @default(uuid())
+  baseOrgId       String   @map("base_org_id")
+  baseOrgName     String   @map("base_org_name")
+  recordDate      String   @map("record_date")
+  uploadedBy      String   @map("uploaded_by")
+  uploaderName    String   @map("uploader_name")
+  formalHallCount Int      @map("formal_hall_count")      // 正式厅（有效厅）总数
+  trainingHallCount Int    @map("training_hall_count")    // 训练厅总数
+  totalHallCount  Int      @map("total_hall_count")       // 厅总数
+  operatorStats   Json     @map("operator_stats")         // 按运营账号分组统计
+  rawRowCount     Int      @map("raw_row_count")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  @@unique([baseOrgId, recordDate])
+  @@map("hall_daily_summaries")
+}
+
+// 主播流失每日快照（近30天流失 + 昨日流失）
+model AnchorLossDailySummary {
+  id                String   @id @default(uuid())
+  baseOrgId         String   @unique @map("base_org_id")
+  baseOrgName       String   @map("base_org_name")
+  recordDate        String   @map("record_date")              // 最新上传的归属日期
+  uploadedBy        String   @map("uploaded_by")
+  uploaderName      String   @map("uploader_name")
+  lossWithin30Days  Int      @map("loss_within_30_days")
+  lossYesterday     Int      @map("loss_yesterday")
+  totalLossCount    Int      @map("total_loss_count")
+  lossDetail        Json     @default("{}") @map("loss_detail")           // {date: count}
+  lossOperatorDetail Json    @default("{}") @map("loss_operator_detail")  // {date: {operator: count}}
+  rawRowCount       Int      @map("raw_row_count")
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  @@map("anchor_loss_daily_summaries")
+}
+
+// 基地直播间空余（覆盖式：每个基地一条最新记录）
+model LiveRoomCapacity {
+  id           String   @id @default(uuid())
+  baseOrgId    String   @unique @map("base_org_id")
+  baseOrgName  String   @map("base_org_name")
+  totalCount   Int      @map("total_count")
+  liveRoomUsed Int      @map("live_room_used")
+  officeUsed   Int      @map("office_used")
+  updatedBy    String   @map("updated_by")
+  updaterName  String   @map("updater_name")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  @@map("live_room_capacities")
+}
+
+// 人均音浪每日快照（每日更新：按 baseOrgId + recordDate 唯一，支持趋势）
+model AnchorAvgWaveDaily {
+  id           String   @id @default(uuid())
+  baseOrgId    String   @map("base_org_id")
+  baseOrgName  String   @map("base_org_name")
+  recordDate   String   @map("record_date")
+  waveType     String   @default("online") @map("wave_type")  // online | offline | total
+  avgWaveValue Float    @map("avg_wave_value")
+  totalWave    Float    @default(0) @map("total_wave")
+  anchorCount  Int      @default(0) @map("anchor_count")
+  uploadedBy   String   @map("uploaded_by")
+  uploaderName String   @map("uploader_name")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  @@unique([baseOrgId, recordDate, waveType])
+  @@map("anchor_avg_wave_dailies")
 }
 
 model Role {

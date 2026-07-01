@@ -1,19 +1,19 @@
-import { useEffect, useState } from "react";
+﻿import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Sparkles, AlertCircle, RefreshCw, TrendingUp, Users, CheckCircle2, Clock, Circle, ShieldOff, ChevronDown, ListTodo, Send, UserRound, Users2, Calendar, X } from "lucide-react";
+import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from "recharts";
+import { Sparkles, AlertCircle, RefreshCw, TrendingUp, Users, CheckCircle2, Clock, Circle, ShieldOff, ChevronDown, Calendar, X, Building2, GraduationCap, UserMinus, Zap, Upload, FileSpreadsheet } from "lucide-react";
 import { AnchorSummaryCard } from "./AnchorSummaryCard";
-import {
-  PieChart,
-  Pie,
-  Cell,
-  ResponsiveContainer,
-  Tooltip,
-} from "recharts";
+import { SummaryDonut, rateColor } from "./SummaryDonut";
+import { KpiCard, AnchorLiveKpiCard } from "./KpiCards";
+import { HallOperatorPopover } from "./HallOperatorPopover";
+import { LossTrendPopover } from "./LossTrendPopover";
+import { WaveTrendPopover } from "./WaveTrendPopover";
 import { api } from "../../../services/http";
-import { recordApi, reportApi } from "../../../services/task";
+import { anchorLossSummaryApi, anchorAvgWaveApi, anchorSummaryApi, liveRoomCapacityApi, dataOverviewApi, hallSummaryApi, reportApi } from "../../../services/task";
+import type { AnchorLossTrendResponse, HallOperatorStat, HallTrendResponse, LiveRoomCapacity, AnchorAvgWaveTrendResponse } from "../../../services/task";
 import { fetchOrgTree } from "../../../services/organization";
 import { useIdentityStore } from "../../../stores/identityStore";
-import type { User, OrgUnit, DailyDashboardResponse, TaskRecord, DailyRangeStatsResponse } from "../../../types";
+import type { User, OrgUnit, DailyDashboardResponse, DailyRangeStatsResponse } from "../../../types";
 
 /** 判断组织是否在身份权限范围内 */
 function isOrgWithinScope(org: OrgUnit, scopePath?: string | null) {
@@ -29,61 +29,6 @@ function calcDays(createdAt: string): number {
   return Math.floor((today.getTime() - start.getTime()) / 86400000) + 1;
 }
 
-/** 完成率颜色 */
-function rateColor(rate: number) {
-  if (rate >= 95) return "#10b981"; // emerald-500
-  if (rate >= 80) return "#f59e0b"; // amber-500
-  return "#ef4444"; // red-500
-}
-
-/** 自定义环形图中心标签 */
-function DonutCenter({ cx, cy, rate }: { cx?: number; cy?: number; rate: number }) {
-  return (
-    <text x={cx} y={cy} textAnchor="middle" dominantBaseline="middle">
-      <tspan
-        x={cx}
-        dy="-6"
-        fontSize="26"
-        fontWeight="700"
-        fill={rateColor(rate)}
-      >
-        {rate.toFixed(1)}%
-      </tspan>
-      <tspan x={cx} dy="24" fontSize="12" fill="#94a3b8">
-        今日完成率
-      </tspan>
-    </text>
-  );
-}
-
-/** KPI 小卡片 */
-function KpiCard({
-  icon,
-  label,
-  value,
-  colorClass,
-  bgClass,
-}: {
-  icon: React.ReactNode;
-  label: string;
-  value: string | number;
-  colorClass: string;
-  bgClass: string;
-}) {
-  return (
-    <div className="flex flex-1 min-w-0 items-center gap-3 rounded-xl border border-slate-100 bg-white px-4 py-4 shadow-sm">
-      <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${bgClass}`}>
-        <span className={colorClass}>{icon}</span>
-      </div>
-      <div className="min-w-0">
-        <p className="text-[11px] text-slate-400 leading-none mb-1">{label}</p>
-        <p className={`text-[22px] font-bold leading-none tabular-nums ${colorClass}`}>{value}</p>
-      </div>
-    </div>
-  );
-}
-
-
 
 export function CockpitPage() {
   const navigate = useNavigate();
@@ -97,9 +42,54 @@ export function CockpitPage() {
   const [lastRefreshed, setLastRefreshed] = useState<Date | null>(null);
   const [expandedTeams, setExpandedTeams] = useState<Set<string>>(new Set());
 
-  // 我的待办
-  const [myRecords, setMyRecords] = useState<TaskRecord[]>([]);
-  const [myRecordsLoading, setMyRecordsLoading] = useState(true);
+  // 厅个数趋势数据（正式厅 / 训练厅 KPI）
+  const [hallTrend, setHallTrend] = useState<HallTrendResponse | null>(null);
+  // 主播流失趋势数据
+  const [lossTrend, setLossTrend] = useState<AnchorLossTrendResponse | null>(null);
+
+  // 基地直播间空余数据
+  const [roomCapacity, setRoomCapacity] = useState<LiveRoomCapacity | null>(null);
+  // 人均音浪趋势数据
+  const [avgWaveTrend, setAvgWaveTrend] = useState<AnchorAvgWaveTrendResponse | null>(null);
+
+  // 厅个数上传弹窗状态
+  const [hallUploadDate, setHallUploadDate] = useState("");
+  const [hallUploadFile, setHallUploadFile] = useState<File | null>(null);
+  const [hallUploading, setHallUploading] = useState(false);
+  const [hallUploadError, setHallUploadError] = useState("");
+  const hallFileInputRef = useRef<HTMLInputElement>(null);
+
+  // 数据录入弹窗（直播间空余 + 人均音浪）
+  const [dataInputDate, setDataInputDate] = useState(getBeijingDateStr(-1));
+  const [dataInputTotal, setDataInputTotal] = useState("");
+  const [dataInputLiveRoom, setDataInputLiveRoom] = useState("");
+  const [dataInputOffice, setDataInputOffice] = useState("");
+  const [dataInputAvgWave, setDataInputAvgWave] = useState("");
+  const [dataInputOfflineAvgWave, setDataInputOfflineAvgWave] = useState("");
+  const [dataInputTotalAvgWave, setDataInputTotalAvgWave] = useState("");
+  const [dataInputLoading, setDataInputLoading] = useState(false);
+  const [dataInputError, setDataInputError] = useState("");
+
+  // 统一上传弹窗
+  const [dataUploadOpen, setDataUploadOpen] = useState(false);
+  const [dataUploadTab, setDataUploadTab] = useState<"excel" | "anchor" | "manual">("excel");
+  // 主播数据表上传 state
+  const [anchorUploadDate, setAnchorUploadDate] = useState(getBeijingDateStr(-1));
+  const [anchorUploadFile, setAnchorUploadFile] = useState<File | null>(null);
+  const [anchorUploading, setAnchorUploading] = useState(false);
+  const [anchorUploadError, setAnchorUploadError] = useState("");
+  const anchorFileInputRef = useRef<HTMLInputElement>(null);
+
+  // 厅个数 KPI 卡片悬停浮层
+  const [hoveredHallKpi, setHoveredHallKpi] = useState<"formal" | "training" | null>(null);
+  const formalKpiRef = useRef<HTMLDivElement>(null);
+  const trainingKpiRef = useRef<HTMLDivElement>(null);
+  // 流失卡片悬停浮层
+  const [hoveredLossKpi, setHoveredLossKpi] = useState(false);
+  const lossKpiRef = useRef<HTMLDivElement>(null);
+  // 音浪卡片悬停浮层
+  const [hoveredWaveKpi, setHoveredWaveKpi] = useState(false);
+  const waveKpiRef = useRef<HTMLDivElement>(null);
 
   // 基地选择（给 DEV_ADMIN / HQ_ADMIN 使用）
   const [baseOrgs, setBaseOrgs] = useState<OrgUnit[]>([]);
@@ -107,7 +97,7 @@ export function CockpitPage() {
 
   const canViewReport = permissions.includes("*") || permissions.includes("task:report:view");
   const isAdminLevel = currentIdentity &&
-    ["DEV_ADMIN", "HQ_ADMIN", "BASE_ADMIN", "TEAM_ADMIN", "HALL_MANAGER"].includes(currentIdentity.roleCode);
+    ["DEV_ADMIN", "HQ_ADMIN", "BASE_ADMIN", "TEAM_ADMIN"].includes(currentIdentity.roleCode);
   const showDashboard = canViewReport && isAdminLevel;
 
   // DEV_ADMIN / HQ_ADMIN 需要选基地；其他角色直接用自己的 orgId 作为 scopeOrgId
@@ -125,15 +115,6 @@ export function CockpitPage() {
       if (user?.createdAt) setDays(calcDays(user.createdAt));
     }).catch(console.error);
   }, []);
-
-  // 加载我的待办
-  useEffect(() => {
-    setMyRecordsLoading(true);
-    recordApi.getMyRecords()
-      .then(setMyRecords)
-      .catch(console.error)
-      .finally(() => setMyRecordsLoading(false));
-  }, [currentIdentity?.id]);
 
   // DEV_ADMIN / HQ_ADMIN：加载基地列表
   useEffect(() => {
@@ -189,6 +170,189 @@ export function CockpitPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedBaseOrgId]);
 
+  // ── 厅个数趋势数据（正式厅/训练厅 KPI） ──
+  const loadHallTrend = (overrideScopeOrgId?: string) => {
+    if (!showDashboard) return;
+    const sid = overrideScopeOrgId ?? scopeOrgId;
+    if (needsBaseSelect && !sid) return;
+    hallSummaryApi.getTrend(sid, 7)
+      .then(setHallTrend)
+      .catch(() => setHallTrend(null));
+  };
+
+  useEffect(() => {
+    if (needsBaseSelect) return;
+    loadHallTrend();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showDashboard, currentIdentity?.id]);
+
+  useEffect(() => {
+    if (!needsBaseSelect || !selectedBaseOrgId) return;
+    loadHallTrend(selectedBaseOrgId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedBaseOrgId]);
+
+  // ── 主播流失趋势数据 ──
+  const loadLossTrend = (sid?: string) => {
+    if (!showDashboard) return;
+    anchorLossSummaryApi.getTrend(sid ?? scopeOrgId, 7)
+      .then(setLossTrend)
+      .catch(() => setLossTrend(null));
+  };
+  useEffect(() => {
+    if (needsBaseSelect) return;
+    loadLossTrend();
+  }, [showDashboard, currentIdentity?.id]);
+  useEffect(() => {
+    if (!needsBaseSelect || !selectedBaseOrgId) return;
+    loadLossTrend(selectedBaseOrgId);
+  }, [selectedBaseOrgId]);
+
+  // ── 直播间空余数据 ──
+  const loadRoomCapacity = (sid?: string) => {
+    if (!showDashboard) return;
+    liveRoomCapacityApi.getLatest(sid ?? scopeOrgId)
+      .then(setRoomCapacity)
+      .catch(() => setRoomCapacity(null));
+  };
+  useEffect(() => {
+    if (needsBaseSelect) return;
+    loadRoomCapacity();
+  }, [showDashboard, currentIdentity?.id]);
+  useEffect(() => {
+    if (!needsBaseSelect || !selectedBaseOrgId) return;
+    loadRoomCapacity(selectedBaseOrgId);
+  }, [selectedBaseOrgId]);
+
+  // ── 人均音浪趋势数据 ──
+  const loadAvgWaveTrend = (sid?: string) => {
+    if (!showDashboard) return;
+    anchorAvgWaveApi.getTrend(sid ?? scopeOrgId, 7)
+      .then(setAvgWaveTrend)
+      .catch(() => setAvgWaveTrend(null));
+  };
+  useEffect(() => {
+    if (needsBaseSelect) return;
+    loadAvgWaveTrend();
+  }, [showDashboard, currentIdentity?.id]);
+  useEffect(() => {
+    if (!needsBaseSelect || !selectedBaseOrgId) return;
+    loadAvgWaveTrend(selectedBaseOrgId);
+  }, [selectedBaseOrgId]);
+
+  // ── 数据录入弹窗已合并到统一上传弹窗 ──
+  const handleDataInputSubmit = async () => {
+    setDataInputError("");
+    const total = parseInt(dataInputTotal, 10);
+    const live = parseInt(dataInputLiveRoom, 10);
+    const office = parseInt(dataInputOffice, 10);
+    const avgWave = parseFloat(dataInputAvgWave);
+    const offlineAvgWave = parseFloat(dataInputOfflineAvgWave);
+    const totalAvgWave = parseFloat(dataInputTotalAvgWave);
+
+    // 校验
+    const hasRoom = dataInputTotal || dataInputLiveRoom || dataInputOffice;
+    const hasWave = dataInputAvgWave;
+    const hasOfflineWave = dataInputOfflineAvgWave;
+    const hasTotalWave = dataInputTotalAvgWave;
+    if (!hasRoom && !hasWave && !hasOfflineWave && !hasTotalWave) {
+      setDataInputError("请至少填写一项数据");
+      return;
+    }
+    if (hasRoom) {
+      if (isNaN(total) || total < 0) { setDataInputError("总数量需为有效非负整数"); return; }
+      if (isNaN(live) || live < 0) { setDataInputError("直播间已使用需为有效非负整数"); return; }
+      if (isNaN(office) || office < 0) { setDataInputError("办公室已使用需为有效非负整数"); return; }
+    }
+    if ((hasWave || hasOfflineWave || hasTotalWave) && !dataInputDate) {
+      setDataInputError("请选择人均音浪的归属日期"); return;
+    }
+      if (hasWave && (isNaN(avgWave) || avgWave < 0)) { setDataInputError("线上人均音浪需为有效非负数"); return; }
+      if (hasOfflineWave && (isNaN(offlineAvgWave) || offlineAvgWave < 0)) { setDataInputError("线下人均音浪需为有效非负数"); return; }
+      if (hasTotalWave && (isNaN(totalAvgWave) || totalAvgWave < 0)) { setDataInputError("人均音浪需为有效非负数"); return; }
+
+    setDataInputLoading(true);
+    try {
+      const tasks: Promise<any>[] = [];
+      if (hasRoom) {
+        tasks.push(liveRoomCapacityApi.upsert({ totalCount: total, liveRoomUsed: live, officeUsed: office }, scopeOrgId));
+      }
+      if (hasWave) {
+        tasks.push(anchorAvgWaveApi.upsert({ recordDate: dataInputDate, avgWaveValue: avgWave, waveType: "online" }, scopeOrgId));
+      }
+      if (hasOfflineWave) {
+        tasks.push(anchorAvgWaveApi.upsert({ recordDate: dataInputDate, avgWaveValue: offlineAvgWave, waveType: "offline" }, scopeOrgId));
+      }
+      if (hasTotalWave) {
+        tasks.push(anchorAvgWaveApi.upsert({ recordDate: dataInputDate, avgWaveValue: totalAvgWave, waveType: "total" }, scopeOrgId));
+      }
+      await Promise.all(tasks);
+      // 刷新数据
+      if (hasRoom) loadRoomCapacity();
+      if (hasWave || hasOfflineWave || hasTotalWave) loadAvgWaveTrend();
+      // 刷新 KPI 数据
+      loadHallTrend();
+      loadLossTrend();
+      setDataUploadOpen(false);
+    } catch (e: any) {
+      const msg = e?.response?.data?.message || e?.message || "录入失败";
+      setDataInputError(msg);
+    } finally {
+      setDataInputLoading(false);
+    }
+  };
+
+  // ── 厅个数上传 ──
+  // 厅个数上传已合并到统一上传弹窗 ──
+  const handleHallFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) setHallUploadFile(file);
+  };
+  const handleHallConfirmUpload = async () => {
+    if (!hallUploadFile) return;
+    setHallUploading(true);
+    setHallUploadError("");
+    try {
+      const res = await dataOverviewApi.upload(hallUploadFile, scopeOrgId, hallUploadDate);
+      console.log("上传成功:", res);
+      setDataUploadOpen(false);
+      setHallUploadFile(null);
+      if (hallFileInputRef.current) hallFileInputRef.current.value = "";
+      loadHallTrend();
+      loadLossTrend();
+    } catch (e: any) {
+      const msg = e?.response?.data?.message || e?.message || "上传失败，请检查网络或重试";
+      setHallUploadError(msg);
+      console.error("上传失败:", e);
+    } finally {
+      setHallUploading(false);
+    }
+  };
+
+  // ── 主播数据表上传（统一弹窗 anchor tab） ──
+  const handleAnchorFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) setAnchorUploadFile(file);
+  };
+  const handleAnchorConfirmUpload = async () => {
+    if (!anchorUploadFile) return;
+    setAnchorUploading(true);
+    setAnchorUploadError("");
+    try {
+      await anchorSummaryApi.upload(anchorUploadFile, scopeOrgId, anchorUploadDate);
+      setDataUploadOpen(false);
+      setAnchorUploadFile(null);
+      if (anchorFileInputRef.current) anchorFileInputRef.current.value = "";
+      // 触发自定义事件，让 AnchorSummaryCard 刷新
+      window.dispatchEvent(new CustomEvent("anchor-summary-refresh"));
+    } catch (e: any) {
+      const msg = e?.response?.data?.message || e?.message || "上传失败，请检查网络或重试";
+      setAnchorUploadError(msg);
+    } finally {
+      setAnchorUploading(false);
+    }
+  };
+
   // ── 历史完成率：state ────────────────────────────────────────────
   type RangeKey = "yesterday" | "last3" | "last7" | "thisMonth";
   const [rangeStats, setRangeStats] = useState<Record<RangeKey, DailyRangeStatsResponse | null>>({
@@ -199,13 +363,14 @@ export function CockpitPage() {
   });
   const [rangeLoading, setRangeLoading] = useState(false);
   const [rangeError, setRangeError] = useState<string | null>(null);
-  const [expandedRangeTeams, setExpandedRangeTeams] = useState<Set<string>>(new Set());
   // 自定义时间（融合在"本月"行）
   const [customDateOpen, setCustomDateOpen] = useState(false);
   const [customStart, setCustomStart] = useState("");
   const [customEnd, setCustomEnd] = useState("");
   const [customLabel, setCustomLabel] = useState<string | null>(null); // null = 本月模式
   const [customLoading, setCustomLoading] = useState(false);
+  // 悬停的环形图（用于展开团队明细）
+  const [hoveredRangeKey, setHoveredRangeKey] = useState<RangeKey | null>(null);
 
   function getBeijingDateStr(offsetDays = 0): string {
     const now = new Date();
@@ -263,6 +428,42 @@ export function CockpitPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedBaseOrgId]);
 
+  // ── 自定义日期查询 / 重置 ──
+  const handleCustomQuery = () => {
+    if (!customStart || !customEnd) return;
+    if (customStart > customEnd) return;
+    const sid = scopeOrgId ?? undefined;
+    setCustomLoading(true);
+    reportApi.getDailyRangeStats(customStart, customEnd, sid)
+      .then((res) => {
+        setRangeStats((prev) => ({ ...prev, thisMonth: res }));
+        setCustomLabel("自定义日期");
+        setCustomDateOpen(false);
+      })
+      .catch(() => {})
+      .finally(() => setCustomLoading(false));
+  };
+
+  const handleResetToMonth = () => {
+    setCustomLabel(null);
+    setCustomDateOpen(false);
+    const today = getBeijingDateStr(0);
+    const yesterday = getBeijingDateStr(-1);
+    const monthStart = `${today.slice(0, 8)}01`;
+    const sid = scopeOrgId ?? undefined;
+    reportApi.getDailyRangeStats(monthStart, yesterday, sid)
+      .then((res) => setRangeStats((prev) => ({ ...prev, thisMonth: res })))
+      .catch(() => {});
+  };
+
+  const RANGE_LABELS: Record<string, string> = {
+    yesterday: "昨天",
+    last3: "近3天",
+    last7: "近7天",
+    thisMonth: customLabel ?? "本月",
+  };
+  const RANGE_KEYS = ["yesterday", "last3", "last7", "thisMonth"] as const;
+
   // 环形图数据
   const donutData = dashboard
     ? [
@@ -278,361 +479,735 @@ export function CockpitPage() {
   return (
     <div className="space-y-5">
       {/* ── 顶部 Banner ── */}
-      <div className="relative overflow-hidden rounded-2xl bg-gradient-to-r from-feishu-blue to-[#7B9DFF] px-8 py-4 text-white shadow-[0_14px_40px_rgba(76,114,255,0.28)]">
-        <div className="relative z-10 flex items-center gap-3">
-          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-white/20 backdrop-blur-sm">
-            <Sparkles size={20} className="text-white" />
+      <div className="relative z-20 overflow-hidden rounded-2xl bg-gradient-to-r from-feishu-blue to-[#7B9DFF] px-6 py-2.5 text-white shadow-[0_14px_40px_rgba(76,114,255,0.28)] isolate">
+        <div className="relative z-10 flex items-center gap-2.5">
+          {/* 星星按钮（双击打开上传弹窗，hover 呼吸 + tooltip） */}
+          <div className="relative group">
+            {/* 装饰圆点 */}
+            <span className="pointer-events-none absolute -right-1 -top-1 h-2 w-2 rounded-full bg-amber-300 opacity-0 group-hover:opacity-100 transition-opacity shadow-[0_0_8px_rgba(252,211,77,0.8)]" />
+            {/* 呼吸光圈 */}
+            <span className="pointer-events-none absolute inset-0 rounded-lg bg-white/20 animate-ping opacity-0 group-hover:opacity-30" />
+            <button
+              onDoubleClick={() => {
+                const yesterday = getBeijingDateStr(-1);
+                setHallUploadDate(yesterday);
+                setHallUploadFile(null);
+                setHallUploadError("");
+                setDataInputDate(yesterday);
+                setDataInputTotal(""); setDataInputLiveRoom(""); setDataInputOffice("");
+                setDataInputAvgWave(""); setDataInputOfflineAvgWave(""); setDataInputTotalAvgWave(""); setDataInputError("");
+                setDataUploadTab("excel");
+                setDataUploadOpen(true);
+              }}
+              title="双击打开上传"
+              className="relative flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-white/15 backdrop-blur-sm border border-white/30 transition-all hover:bg-white/30 hover:scale-110 active:scale-95"
+            >
+              <Sparkles size={17} className="text-white transition-transform group-hover:rotate-12 group-hover:scale-110" />
+            </button>
+            {/* Tooltip */}
+            <span className="pointer-events-none absolute left-1/2 -translate-x-1/2 top-full mt-2 whitespace-nowrap rounded-md bg-slate-800 px-2 py-1 text-[11px] text-white opacity-0 group-hover:opacity-100 transition-opacity">
+              上传数据（双击）
+            </span>
           </div>
-          <div>
-            <p className="text-[12px] font-medium text-white/70">成长协同</p>
-            <p className="text-[17px] font-semibold leading-snug tracking-tight">
-              您已陪伴千广成长系统
-              {days !== null ? (
-                <span className="mx-1.5 text-[24px] font-bold tabular-nums">{days}</span>
-              ) : (
-                <span className="mx-1.5 inline-block h-6 w-9 animate-pulse rounded-md bg-white/30 align-middle" />
-              )}
-              天
-            </p>
-          </div>
+          {/* 文字：单行 */}
+          <p className="text-[14px] font-medium text-white/90 leading-none">
+            您已陪伴千广成长系统
+            {days !== null ? (
+              <span className="mx-1 text-[20px] font-bold tabular-nums">{days}</span>
+            ) : (
+              <span className="mx-1 inline-block h-5 w-8 animate-pulse rounded-md bg-white/30 align-middle" />
+            )}
+            天
+            <span className="text-white/50 text-[12px] font-normal ml-1 hidden sm:inline">· 成长协同</span>
+          </p>
+          {/* 基地切换器（挪到这里） */}
+          {needsBaseSelect && baseOrgs.length > 0 && (
+            <div className="ml-auto relative z-20">
+              <select
+                value={selectedBaseOrgId}
+                onChange={(e) => setSelectedBaseOrgId(e.target.value)}
+                className="appearance-none rounded-lg border border-white/30 bg-white/10 backdrop-blur-sm pl-3 pr-7 py-1.5 text-[12px] text-white hover:bg-white/20 focus:outline-none focus:ring-2 focus:ring-white/40 cursor-pointer"
+              >
+                {baseOrgs.map((b) => (
+                  <option key={b.id} value={b.id} className="text-slate-700 bg-white">{b.name}</option>
+                ))}
+              </select>
+              <ChevronDown size={12} className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-white/80" />
+            </div>
+          )}
         </div>
-        <div className="pointer-events-none absolute -right-10 -top-10 h-40 w-40 rounded-full bg-white/10" />
-        <div className="pointer-events-none absolute -bottom-6 right-24 h-28 w-28 rounded-full bg-white/10" />
+        <div className="pointer-events-none absolute -right-12 -top-12 h-32 w-32 rounded-full bg-white/10" />
+        <div className="pointer-events-none absolute -bottom-8 right-32 h-24 w-24 rounded-full bg-white/10" />
       </div>
 
       {/* ── 没有权限时不展示图表 ── */}
-      {/* ── 我的待办统计 ── */}
-      {(() => {
-        const pending = myRecords.filter((r) => r.status !== "submitted");
-        const daily = pending.filter((r) => r.assignment?.category === "DAILY");
-        const tmpAll = pending.filter((r) => r.assignment?.category === "TEMPORARY");
-        const tmpAccount = tmpAll.filter((r) => r.assignment?.temporaryMode === "ACCOUNT");
-        const tmpAnchor = tmpAll.filter((r) => r.assignment?.temporaryMode === "ANCHOR");
-        const tmpManager = tmpAll.filter((r) => r.assignment?.temporaryMode === "MANAGER");
-
-        function calcProgress(records: TaskRecord[]) {
-          const total = records.reduce((s, r) => s + (r.totalItems ?? 0), 0);
-          const done = records.reduce((s, r) => s + (r.doneItems ?? 0), 0);
-          return { total, done, pct: total > 0 ? Math.round((done / total) * 100) : 0 };
-        }
-
-        const groups = [
-          { key: "daily", label: "主播日常任务", icon: <CheckCircle2 size={15} />, records: daily, color: "#3b82f6", bg: "bg-blue-50", text: "text-blue-600", bar: "from-blue-400 to-blue-600" },
-          { key: "account", label: "触达式", icon: <Send size={15} />, records: tmpAccount, color: "#06b6d4", bg: "bg-sky-50", text: "text-sky-600", bar: "from-sky-400 to-sky-600" },
-          { key: "anchor", label: "主播式", icon: <UserRound size={15} />, records: tmpAnchor, color: "#10b981", bg: "bg-emerald-50", text: "text-emerald-600", bar: "from-emerald-400 to-emerald-500" },
-          { key: "manager", label: "管理式", icon: <Users2 size={15} />, records: tmpManager, color: "#8b5cf6", bg: "bg-violet-50", text: "text-violet-600", bar: "from-violet-400 to-violet-600" },
-        ];
-
-        return (
-          <div>
-            <div className="mb-3 flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <ListTodo size={15} className="text-feishu-blue" />
-                <span className="text-[13px] font-semibold text-slate-700">我的待办汇总</span>
-                <span className="rounded-md bg-slate-100 px-2 py-0.5 text-[11px] text-slate-500 tabular-nums">
-                  {myRecordsLoading ? "…" : `${pending.length} 项未完成`}
-                </span>
-              </div>
-              <button
-                onClick={() => navigate("/tasks/dashboard")}
-                className="flex items-center gap-1 rounded-lg border border-feishu-blue/30 bg-feishu-blue/5 px-2.5 py-1 text-[11px] font-medium text-feishu-blue hover:bg-feishu-blue/10 transition-colors"
-              >
-                查看详情 →
-              </button>
-            </div>
-
-            {myRecordsLoading ? (
-              <div className="grid grid-cols-4 gap-2">
-                {[...Array(4)].map((_, i) => (
-                  <div key={i} className="h-9 animate-pulse rounded-lg bg-slate-100" />
-                ))}
-              </div>
-            ) : (
-              <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
-                {groups.map((g) => {
-                  const prog = calcProgress(g.records);
-                  return (
-                    <div key={g.key} className="flex items-center gap-2.5 rounded-lg border border-slate-100 bg-white px-3 py-1.5 shadow-sm">
-                      {/* 图标 */}
-                      <span className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-md ${g.bg} ${g.text}`}>{g.icon}</span>
-                      {/* 名称 */}
-                      <span className="shrink-0 text-[12px] font-semibold text-slate-600 w-16">{g.label}</span>
-                      {/* 进度条 */}
-                      <div className="min-w-0 flex-1 h-1.5 overflow-hidden rounded-full bg-slate-100">
-                        <div
-                          className={`h-full rounded-full bg-gradient-to-r transition-all ${g.bar}`}
-                          style={{ width: `${prog.pct}%` }}
-                        />
-                      </div>
-                      {/* 百分比 */}
-                      <span className={`shrink-0 text-[11px] font-bold tabular-nums ${g.text}`}>{prog.pct}%</span>
-                      {/* 数量徽章 */}
-                      <span className={`shrink-0 rounded-full px-1.5 py-0.5 text-[11px] font-bold ${g.bg} ${g.text}`}>{g.records.length}</span>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-        );
-      })()}
-
       {!showDashboard && (
         <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 py-16 text-center text-sm text-slate-400">
           更多模块敬请期待…
         </div>
       )}
 
-      {/* ── 历史待办完成率 + 主播汇总 两列并排 ── */}
+      {/* ── 历史待办完成率 + 直播间空余 ── */}
       {showDashboard && (
-        <div className="grid grid-cols-2 gap-4 items-start">
-
-      {/* ── 基地看板：历史待办完成率 ── */}
-      {(() => {
-        const RANGE_LABELS: Record<string, string> = {
-          yesterday: "昨天",
-          last3: "近3天",
-          last7: "近7天",
-          thisMonth: customLabel ?? "本月",
-        };
-        const RANGE_KEYS = ["yesterday", "last3", "last7", "thisMonth"] as const;
-
-        function RangeProgressBar({ rate, exemptRate, variant = "auto" }: { rate: number; exemptRate: number; variant?: "auto" | "blue" }) {
-          const autoColor = rate >= 95 ? "#10b981" : rate >= 80 ? "#f59e0b" : "#ef4444";
-          const color = variant === "blue" ? "#3b82f6" : autoColor;
-          return (
-            <div className="flex items-center gap-3 min-w-0">
-              <div className="flex-1 min-w-0 h-2 rounded-full bg-slate-100 overflow-hidden">
-                <div
-                  className="h-full rounded-full transition-all"
-                  style={{ width: `${rate}%`, backgroundColor: color }}
-                />
-              </div>
-              <span className="text-[13px] font-bold tabular-nums shrink-0" style={{ color }}>{rate}%</span>
-              {exemptRate > 0 && (
-                <span className="text-[11px] text-violet-500 tabular-nums shrink-0">豁免 {exemptRate}%</span>
+        <>
+        <div className="grid grid-cols-1 lg:grid-cols-5 gap-4">
+          <div className="lg:col-span-3 rounded-2xl border border-slate-100 bg-white shadow-sm">
+          {/* 标题行 */}
+          <div className="flex flex-wrap items-center justify-between gap-2 px-5 h-14 border-b border-slate-100">
+            <div className="flex items-center gap-2 min-w-0">
+              <TrendingUp size={16} className="text-feishu-blue shrink-0" />
+              <span className="text-[14px] font-semibold text-slate-700 truncate">
+                {rangeStats.yesterday?.baseOrg.name
+                  ? `${rangeStats.yesterday.baseOrg.name} · 主播日常任务完成率（历史）`
+                  : "基地看板 · 主播日常任务完成率（历史）"}
+              </span>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              {rangeError && (
+                <span className="text-[11px] text-red-500">{rangeError}</span>
               )}
-            </div>
-          );
-        }
-
-        const handleCustomQuery = () => {
-          if (!customStart || !customEnd) return;
-          if (customStart > customEnd) return;
-          const sid = scopeOrgId ?? undefined;
-          setCustomLoading(true);
-          reportApi.getDailyRangeStats(customStart, customEnd, sid)
-            .then((res) => {
-              setRangeStats((prev) => ({ ...prev, thisMonth: res }));
-              setCustomLabel("自定义日期");
-              setCustomDateOpen(false);
-            })
-            .catch(() => {})
-            .finally(() => setCustomLoading(false));
-        };
-
-        const handleResetToMonth = () => {
-          setCustomLabel(null);
-          setCustomDateOpen(false);
-          // 重新用本月范围刷一次 thisMonth
-          const today = getBeijingDateStr(0);
-          const yesterday = getBeijingDateStr(-1);
-          const monthStart = `${today.slice(0, 8)}01`;
-          const sid = scopeOrgId ?? undefined;
-          reportApi.getDailyRangeStats(monthStart, yesterday, sid)
-            .then((res) => setRangeStats((prev) => ({ ...prev, thisMonth: res })))
-            .catch(() => {});
-        };
-
-        return (
-          <div className="rounded-2xl border border-slate-100 bg-white shadow-sm overflow-hidden">
-            {/* 标题行 */}
-            <div className="flex flex-wrap items-center justify-between gap-2 px-5 h-14 border-b border-slate-100">
-              <div className="flex items-center gap-2">
-                <TrendingUp size={16} className="text-feishu-blue" />
-                <span className="text-[14px] font-semibold text-slate-700">
-                  {rangeStats.yesterday?.baseOrg.name
-                    ? `${rangeStats.yesterday.baseOrg.name} · 历史待办完成率`
-                    : "基地看板 · 历史待办完成率"}
+              {/* 图例（已合并到标题行，节省高度） */}
+              <span className="hidden lg:flex items-center gap-2 text-[11px] text-slate-400">
+                <span className="flex items-center gap-1">
+                  <span className="inline-block w-2.5 h-2.5 rounded-sm bg-emerald-500" />
+                  已完成
                 </span>
-              </div>
-              <div className="flex items-center gap-2">
-                {rangeError && (
-                  <span className="text-[11px] text-red-500">{rangeError}</span>
-                )}
-                <button
-                  onClick={() => loadRangeStats()}
-                  disabled={rangeLoading}
-                  className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-[12px] text-slate-600 hover:bg-slate-50 disabled:opacity-50 transition-colors"
-                >
-                  <RefreshCw size={12} className={rangeLoading ? "animate-spin" : ""} />
-                  刷新
-                </button>
-              </div>
+                <span className="flex items-center gap-1">
+                  <span className="inline-block w-2.5 h-2.5 rounded-sm bg-slate-200" />
+                  未完成
+                </span>
+              </span>
+              {/* 进入看板（已合并到标题行，节省高度） */}
+              <button
+                onClick={() => navigate(`/tasks/dashboard/daily-board?taskDate=${getBeijingDateStr(-1)}&scopeOrgId=${scopeOrgId ?? ""}`)}
+                className="flex items-center gap-1 rounded-lg border border-feishu-blue/30 bg-feishu-blue/5 px-2.5 py-1 text-[11px] font-medium text-feishu-blue hover:bg-feishu-blue/10 transition-colors"
+              >
+                进入看板 →
+              </button>
+              <button
+                onClick={() => loadRangeStats()}
+                disabled={rangeLoading}
+                className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-[12px] text-slate-600 hover:bg-slate-50 disabled:opacity-50 transition-colors"
+              >
+                <RefreshCw size={12} className={rangeLoading ? "animate-spin" : ""} />
+                刷新
+              </button>
             </div>
+          </div>
 
-            {/* 各时间段行 */}
-            {rangeLoading && !rangeStats.yesterday ? (
-              <div className="space-y-0">
+          {/* 环形图区域 */}
+          {rangeLoading && !rangeStats.yesterday ? (
+            <div className="px-5 py-8">
+              <div className="grid grid-cols-4 gap-3">
                 {[...Array(4)].map((_, i) => (
-                  <div key={i} className="px-5 py-4 border-b border-slate-50 last:border-0">
-                    <div className="h-4 w-full animate-pulse rounded bg-slate-100" />
+                  <div key={i} className="flex flex-col items-center gap-3">
+                    <div className="w-[120px] h-[120px] rounded-full animate-pulse bg-slate-100" />
+                    <div className="h-3 w-16 animate-pulse rounded bg-slate-100" />
+                    <div className="h-2 w-20 animate-pulse rounded bg-slate-100" />
                   </div>
                 ))}
               </div>
-            ) : (
-              <div className="divide-y divide-slate-50">
+            </div>
+          ) : (
+            <div className="px-5 pt-5 pb-3">
+              <div className="grid grid-cols-4 gap-2">
                 {RANGE_KEYS.map((key) => {
                   const data = rangeStats[key];
                   const label = RANGE_LABELS[key];
-                  const expandKey = key;
-                  const isExpanded = expandedRangeTeams.has(expandKey);
                   const isThisMonth = key === "thisMonth";
-
+                  const isHovered = hoveredRangeKey === key;
+                  const hasTeams = (data?.teams?.length ?? 0) > 0;
                   return (
-                    <div key={key}>
-                      {/* 主行 */}
-                      <div className="px-5 h-11 flex items-center gap-4">
-                        {/* 时间标签（本月行可点击切换自定义） */}
-                        <div className="w-40 shrink-0 flex items-center gap-1 min-w-0">
-                          <span className="text-[12px] text-slate-500 truncate">{label}</span>
-                          {isThisMonth && (
-                            <button
-                              title={customLabel ? "重置为本月" : "自定义日期"}
-                              onClick={() => {
-                                if (customLabel) {
-                                  handleResetToMonth();
-                                } else {
-                                  setCustomDateOpen((v) => !v);
-                                }
-                              }}
-                              className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] leading-none transition-colors border ${
-                                customLabel
-                                  ? "bg-slate-100 text-slate-400 border-slate-200 hover:bg-slate-200"
-                                  : "bg-blue-50 text-blue-500 border-blue-300 hover:bg-blue-100"
-                              }`}
-                            >
-                              {customLabel ? "重置" : "自定义日期"}
-                            </button>
-                          )}
-                        </div>
-
-                        {/* 进度条区域 */}
-                        <div className="flex-1 min-w-0">
-                          {!data ? (
-                            <span className="text-[12px] text-slate-300">暂无数据</span>
-                          ) : data.summary.total === 0 ? (
-                            <span className="text-[12px] text-slate-300">0 人次（暂无投放记录）</span>
-                          ) : (
-                            <RangeProgressBar
-                              rate={data.summary.completionRate}
-                              exemptRate={data.summary.exemptionRate}
-                            />
-                          )}
-                        </div>
-
-                        {/* 投放人次 */}
-                        {data && data.summary.total > 0 && (
-                          <span className="text-[11px] text-slate-400 shrink-0 tabular-nums">
-                            {data.summary.completed}/{data.summary.total} 人次
-                          </span>
-                        )}
-
-                        {/* 展开按钮 */}
-                        {data && data.teams.length > 0 && (
+                    <div
+                      key={key}
+                      className={`relative flex flex-col items-center rounded-xl py-3 px-1 transition-colors cursor-default ${
+                        isHovered ? "bg-slate-100" : "bg-slate-50/50 hover:bg-slate-100/50"
+                      }`}
+                      onMouseEnter={() => setHoveredRangeKey(key)}
+                      onMouseLeave={() => setHoveredRangeKey((prev) => (prev === key ? null : prev))}
+                    >
+                      <SummaryDonut data={data} label={label}>
+                        {isThisMonth && (
                           <button
+                            title={customLabel ? "重置为本月" : "自定义日期"}
                             onClick={() => {
-                              const next = new Set(expandedRangeTeams);
-                              if (isExpanded) next.delete(expandKey);
-                              else next.add(expandKey);
-                              setExpandedRangeTeams(next);
+                              if (customLabel) {
+                                handleResetToMonth();
+                              } else {
+                                setCustomDateOpen((v) => !v);
+                              }
                             }}
-                            className={`flex items-center gap-1 rounded-md px-2 py-0.5 text-[11px] font-medium transition-colors shrink-0 border ${
-                              isExpanded
-                                ? "border-feishu-blue/30 bg-feishu-blue/8 text-feishu-blue hover:bg-feishu-blue/15"
-                                : "border-slate-200 bg-white text-slate-500 hover:border-feishu-blue/40 hover:text-feishu-blue hover:bg-feishu-blue/5"
+                            className={`mt-1 rounded-full px-2.5 py-0.5 text-[11px] leading-none transition-colors border ${
+                              customLabel
+                                ? "bg-slate-100 text-slate-400 border-slate-200 hover:bg-slate-200"
+                                : "bg-blue-50 text-blue-500 border-blue-300 hover:bg-blue-100"
                             }`}
                           >
-                            <ChevronDown
-                              size={13}
-                              className={`transition-transform ${isExpanded ? "rotate-180" : ""}`}
-                            />
-                            {isExpanded ? "收起" : "展开"}
+                            {customLabel ? "重置" : "自定义日期"}
                           </button>
                         )}
-                      </div>
+                      </SummaryDonut>
 
-                      {/* 本月行：自定义日期选择器（内嵌展开） */}
-                      {isThisMonth && customDateOpen && (
-                        <div className="bg-slate-50 border-t border-slate-100 px-5 py-3 flex flex-wrap items-center gap-2">
-                          <input
-                            type="date"
-                            value={customStart}
-                            onChange={(e) => setCustomStart(e.target.value)}
-                            className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-[12px] text-slate-700 focus:outline-none focus:border-feishu-blue"
-                          />
-                          <span className="text-[12px] text-slate-400">至</span>
-                          <input
-                            type="date"
-                            value={customEnd}
-                            onChange={(e) => setCustomEnd(e.target.value)}
-                            className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-[12px] text-slate-700 focus:outline-none focus:border-feishu-blue"
-                          />
-                          <button
-                            onClick={handleCustomQuery}
-                            disabled={!customStart || !customEnd || customStart > customEnd || customLoading}
-                            className="rounded-lg bg-feishu-blue px-3 py-1 text-[12px] text-white hover:opacity-90 disabled:opacity-40 transition-opacity"
-                          >
-                            {customLoading ? "查询中…" : "查询"}
-                          </button>
-                          <button
-                            onClick={() => setCustomDateOpen(false)}
-                            className="rounded-lg border border-slate-200 bg-white px-3 py-1 text-[12px] text-slate-500 hover:bg-slate-100 transition-colors"
-                          >
-                            取消
-                          </button>
-                        </div>
-                      )}
-
-                      {/* 展开的团队列表 */}
-                      {isExpanded && data && data.teams.length > 0 && (
-                        <div className="border-t border-feishu-blue/15 bg-blue-50/40 px-5 pb-3 pt-2 space-y-2">
-                          {data.teams.map((team) => (
-                            <div key={team.orgId} className="flex items-center gap-4">
-                              <span className="text-[12px] text-slate-500 w-32 shrink-0 pl-4 border-l-2 border-feishu-blue/30">
-                                {team.orgName}
-                              </span>
-                              <div className="flex-1 min-w-0">
-                                {team.total === 0 ? (
-                                  <span className="text-[11px] text-slate-300">无数据</span>
-                                ) : (
-                                  <RangeProgressBar
-                                    rate={team.completionRate}
-                                    exemptRate={team.exemptionRate}
-                                    variant="blue"
+                      {/* 悬浮浮层：团队明细（不推动布局） */}
+                      {isHovered && hasTeams && data && (
+                        <div className="absolute left-0 right-0 top-full mt-2 z-20 bg-white border border-slate-200 rounded-xl shadow-[0_8px_30px_rgba(0,0,0,0.12)] p-3 space-y-1.5 min-w-[260px]">
+                          <p className="text-[11px] font-semibold text-slate-500 mb-2">{label} · 团队明细</p>
+                          {data.teams.map((team) => {
+                            const teamColor = rateColor(team.completionRate);
+                            return (
+                              <div key={team.orgId} className="flex items-center gap-2 text-[11px]">
+                                <span className="w-[64px] shrink-0 text-slate-600 font-medium truncate" title={team.orgName}>
+                                  {team.orgName}
+                                </span>
+                                <div className="flex-1 h-1.5 rounded-full bg-slate-100 overflow-hidden">
+                                  <div
+                                    className="h-full rounded-full transition-all"
+                                    style={{ width: `${team.completionRate}%`, backgroundColor: teamColor }}
                                   />
-                                )}
+                                </div>
+                                <span className="w-[34px] shrink-0 text-right font-bold tabular-nums" style={{ color: teamColor }}>
+                                  {team.completionRate}%
+                                </span>
+                                <span className="w-[42px] shrink-0 text-right text-slate-400 tabular-nums">
+                                  {team.completed}/{team.total}
+                                </span>
                               </div>
-                              <span className="text-[11px] text-slate-400 shrink-0 tabular-nums">
-                                {team.completed}/{team.total}
-                              </span>
-                            </div>
-                          ))}
+                            );
+                          })}
                         </div>
                       )}
                     </div>
                   );
                 })}
               </div>
-            )}
+
+              {/* 自定义日期面板 */}
+              {customDateOpen && (
+                <div className="mt-3 bg-slate-50 border border-slate-100 rounded-xl px-4 py-3 flex flex-wrap items-center gap-2">
+                  <input
+                    type="date"
+                    value={customStart}
+                    onChange={(e) => setCustomStart(e.target.value)}
+                    className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-[12px] text-slate-700 focus:outline-none focus:border-feishu-blue"
+                  />
+                  <span className="text-[12px] text-slate-400">至</span>
+                  <input
+                    type="date"
+                    value={customEnd}
+                    onChange={(e) => setCustomEnd(e.target.value)}
+                    className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-[12px] text-slate-700 focus:outline-none focus:border-feishu-blue"
+                  />
+                  <button
+                    onClick={handleCustomQuery}
+                    disabled={!customStart || !customEnd || customStart > customEnd || customLoading}
+                    className="rounded-lg bg-feishu-blue px-3 py-1 text-[12px] text-white hover:opacity-90 disabled:opacity-40 transition-opacity"
+                  >
+                    {customLoading ? "查询中…" : "查询"}
+                  </button>
+                  <button
+                    onClick={() => setCustomDateOpen(false)}
+                    className="rounded-lg border border-slate-200 bg-white px-3 py-1 text-[12px] text-slate-500 hover:bg-slate-100 transition-colors"
+                  >
+                    取消
+                  </button>
+                </div>
+              )}
+
+              {/* 底部图例 + 进入看板 已合并到标题行（节省高度） */}
+            </div>
+          )}
+        </div>
+
+          {/* 右侧：基地直播间空余 */}
+          {(() => {
+            const cap = roomCapacity;
+            const spare = cap ? cap.totalCount - cap.liveRoomUsed - cap.officeUsed : 0;
+            const livePct = cap && cap.totalCount > 0 ? (cap.liveRoomUsed / cap.totalCount * 100).toFixed(1) : "0";
+            const officePct = cap && cap.totalCount > 0 ? (cap.officeUsed / cap.totalCount * 100).toFixed(1) : "0";
+            const sparePct = cap && cap.totalCount > 0 ? Math.max(0, 100 - Number(livePct) - Number(officePct)).toFixed(1) : "100";
+            return (
+            <div className="lg:col-span-2 rounded-2xl border border-slate-100 bg-gradient-to-br from-[#0a1a3a] to-[#102a5e] text-white px-6 py-8 shadow-sm flex flex-col justify-center h-full">
+              <div className="flex items-center gap-2 mb-5">
+                <Building2 size={18} className="text-sky-300" />
+                <span className="text-[15px] font-semibold">基地直播间空余</span>
+              </div>
+              {cap ? (
+                <>
+                  <div className="space-y-3 text-[14px]">
+                    <div className="flex justify-between"><span className="text-slate-300">总数量</span><span className="font-semibold text-[15px]">{cap.totalCount} 间</span></div>
+                    <div className="flex justify-between"><span className="text-slate-300">直播间已使用</span><span className="font-semibold text-[15px]">{cap.liveRoomUsed}</span></div>
+                    <div className="flex justify-between"><span className="text-slate-300">办公室已使用</span><span className="font-semibold text-[15px]">{cap.officeUsed}</span></div>
+                    <div className="flex justify-between"><span className="text-slate-300">空余房间</span><span className="font-semibold text-emerald-300 text-[15px]">{spare}</span></div>
+                  </div>
+                  <div className="mt-6 h-3 rounded-full overflow-hidden flex bg-slate-700/40">
+                    <div className="bg-emerald-500" style={{ width: `${livePct}%` }} />
+                    <div className="bg-blue-500" style={{ width: `${officePct}%` }} />
+                    <div className="bg-slate-400" style={{ width: `${sparePct}%` }} />
+                  </div>
+                  <div className="mt-4 flex items-center gap-4 text-[12px] text-slate-300">
+                    <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-sm bg-emerald-500" />直播间</span>
+                    <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-sm bg-blue-500" />办公室</span>
+                    <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-sm bg-slate-400" />空余</span>
+                  </div>
+                </>
+              ) : (
+                <div className="flex flex-col items-center gap-2 text-slate-400 text-[13px] py-4">
+                  <Building2 size={28} className="text-slate-500/50" />
+                  <span>暂无数据</span>
+                  <span className="text-[11px]">点击右上角「录入数据」填写</span>
+                </div>
+              )}
+            </div>
+            );
+          })()}
+        </div>
+        </>
+      )}
+
+      {/* ── 主播运营 KPI 概览 ── */}
+      {showDashboard && (() => {
+        const pts = hallTrend?.points ?? [];
+        const latestItem = pts.length > 0 ? pts[pts.length - 1] : null;
+        const prevItem = pts.length > 1 ? pts[pts.length - 2] : null;
+        const formalCount = latestItem?.formalHallCount ?? 0;
+        const trainingCount = latestItem?.trainingHallCount ?? 0;
+        const formalChange = prevItem ? formalCount - prevItem.formalHallCount : 0;
+        const trainingChange = prevItem ? trainingCount - prevItem.trainingHallCount : 0;
+
+        // 厅运营明细
+        const operatorStats: HallOperatorStat[] = (hallTrend?.latest?.operatorStats as HallOperatorStat[]) ?? [];
+        const prevDayOperatorStats: HallOperatorStat[] = (hallTrend?.prevDay?.operatorStats as HallOperatorStat[]) ?? [];
+
+        // 主播流失数据
+        const lossLatest = lossTrend?.latest;
+        const lossCount = lossLatest?.lossWithin30Days ?? 0;
+        const lossYesterday = lossLatest?.lossYesterday ?? 0;
+
+        return (
+        <div className="space-y-3">
+          {/* KPI 卡片 */}
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+            {/* 正式厅：悬停展示运营占比明细 */}
+            <div
+              ref={formalKpiRef}
+              onMouseEnter={() => setHoveredHallKpi("formal")}
+              onMouseLeave={() => setHoveredHallKpi(null)}
+              className="flex-1 min-w-[180px] relative"
+            >
+              <AnchorLiveKpiCard
+                icon={<Building2 size={18} />}
+                label="正式厅"
+                value={formalCount}
+                unit="个"
+                change={formalChange}
+                iconColor="text-blue-600"
+                iconBg="bg-blue-50"
+              />
+              {hoveredHallKpi === "formal" && operatorStats.length > 0 && (
+                <HallOperatorPopover
+                  field="formal"
+                  recordDate={hallTrend?.latest?.recordDate ?? ""}
+                  operators={operatorStats}
+                  prevDayOperators={prevDayOperatorStats}
+                  cardRef={formalKpiRef}
+                />
+              )}
+              {hoveredHallKpi === "formal" && operatorStats.length === 0 && (() => {
+                const r = formalKpiRef.current?.getBoundingClientRect();
+                if (!r) return null;
+                const VIEWPORT_W = window.innerWidth;
+                const showOnRight = VIEWPORT_W - r.right >= 360 + 12;
+                const emptyLeft = showOnRight ? r.right + 12 : Math.max(12, r.left - 360 - 12);
+                return (
+                  <div
+                    className="fixed z-50 rounded-xl bg-white border-2 border-slate-300 overflow-hidden"
+                    style={{
+                      top: r.top,
+                      left: emptyLeft,
+                      width: 360,
+                      boxShadow: '0 12px 32px rgba(15, 23, 42, 0.18)',
+                    }}
+                  >
+                    <div className="flex items-center px-4 py-2 border-b border-slate-200 bg-slate-50">
+                      <span className="text-[13px] font-semibold text-slate-700">正式厅 · 按运营占比排序</span>
+                    </div>
+                    <div className="px-4 py-8 text-center">
+                      <p className="text-[12px] text-slate-400 mb-2">暂无运营明细</p>
+                      <p className="text-[11px] text-slate-300">请点击右上角「上传数据看板」录入每日快照</p>
+                    </div>
+                  </div>
+                );
+              })()}
+            </div>
+            {/* 训练厅：悬停展示运营占比明细 */}
+            <div
+              ref={trainingKpiRef}
+              onMouseEnter={() => setHoveredHallKpi("training")}
+              onMouseLeave={() => setHoveredHallKpi(null)}
+              className="flex-1 min-w-[180px] relative"
+            >
+              <AnchorLiveKpiCard
+                icon={<GraduationCap size={18} />}
+                label="训练厅"
+                value={trainingCount}
+                unit="个"
+                change={trainingChange}
+                iconColor="text-emerald-600"
+                iconBg="bg-emerald-50"
+              />
+              {hoveredHallKpi === "training" && operatorStats.length > 0 && (
+                <HallOperatorPopover
+                  field="training"
+                  recordDate={hallTrend?.latest?.recordDate ?? ""}
+                  operators={operatorStats}
+                  prevDayOperators={prevDayOperatorStats}
+                  cardRef={trainingKpiRef}
+                />
+              )}
+              {hoveredHallKpi === "training" && operatorStats.length === 0 && (() => {
+                const r = trainingKpiRef.current?.getBoundingClientRect();
+                if (!r) return null;
+                const VIEWPORT_W = window.innerWidth;
+                const showOnRight = VIEWPORT_W - r.right >= 360 + 12;
+                const emptyLeft = showOnRight ? r.right + 12 : Math.max(12, r.left - 360 - 12);
+                return (
+                <div
+                  className="fixed z-50 rounded-xl bg-white border-2 border-slate-300 overflow-hidden"
+                  style={{
+                    top: r.top,
+                    left: emptyLeft,
+                    width: 360,
+                    boxShadow: '0 12px 32px rgba(15, 23, 42, 0.18)',
+                  }}
+                >
+                  <div className="flex items-center px-4 py-2 border-b border-slate-200 bg-slate-50">
+                    <span className="text-[13px] font-semibold text-slate-700">训练厅 · 按运营占比排序</span>
+                  </div>
+                  <div className="px-4 py-8 text-center">
+                    <p className="text-[12px] text-slate-400 mb-2">暂无运营明细</p>
+                    <p className="text-[11px] text-slate-300">请点击右上角「上传数据看板」录入每日快照</p>
+                  </div>
+                </div>
+                );
+              })()}
+            </div>
+            <div
+              ref={lossKpiRef}
+              onMouseEnter={() => setHoveredLossKpi(true)}
+              onMouseLeave={() => setHoveredLossKpi(false)}
+              className="flex-1 min-w-[180px] relative"
+            >
+            <AnchorLiveKpiCard
+              icon={<UserMinus size={18} />}
+              label="近30天主播流失"
+              value={lossCount || "--"}
+              unit="人"
+              change={lossYesterday}
+              changeLabel="昨日流失"
+              iconColor="text-red-500"
+              iconBg="bg-red-50"
+            />
+              {hoveredLossKpi && (
+                <LossTrendPopover
+                  lossDetail={(lossLatest?.lossDetail as Record<string, number>) || {}}
+                  lossOperatorDetail={(lossLatest?.lossOperatorDetail as Record<string, Record<string, number>>) || {}}
+                  anchorDate={lossLatest?.recordDate ?? ""}
+                  cardRef={lossKpiRef}
+                />
+              )}
+            </div>
+            <div
+              ref={waveKpiRef}
+              onMouseEnter={() => setHoveredWaveKpi(true)}
+              onMouseLeave={() => setHoveredWaveKpi(false)}
+              className="flex-1 min-w-[180px] relative"
+            >
+              <AnchorLiveKpiCard
+                icon={<Zap size={18} />}
+                label="线下人均音浪"
+                value={(() => {
+                  const off = avgWaveTrend?.offline?.latest;
+                  return off ? off.avgWaveValue.toFixed(1) : "--";
+                })()}
+                unit="万"
+                change={avgWaveTrend?.online?.latest ? Number(avgWaveTrend.online.latest.avgWaveValue.toFixed(1)) : 0}
+                changeLabel="线上"
+                secondaryChange={avgWaveTrend?.total?.latest ? Number(avgWaveTrend.total.latest.avgWaveValue.toFixed(1)) : 0}
+                secondaryLabel="人均"
+                trendChange={avgWaveTrend?.offline?.change}
+                iconColor="text-amber-600"
+                iconBg="bg-amber-50"
+              />
+              {hoveredWaveKpi && avgWaveTrend && (
+                <WaveTrendPopover
+                  online={avgWaveTrend.online}
+                  offline={avgWaveTrend.offline}
+                  total={avgWaveTrend.total}
+                  cardRef={waveKpiRef}
+                />
+              )}
+            </div>
           </div>
+
+          {/* 统一上传弹窗（厅数据/流失表 / 主播数据表 / 数值录入） */}
+          {dataUploadOpen && (() => {
+            const isExcel = dataUploadTab === "excel";
+            const isAnchor = dataUploadTab === "anchor";
+            const isManual = dataUploadTab === "manual";
+            const close = () => {
+              if ((isExcel && hallUploading) || (isAnchor && anchorUploading) || (isManual && dataInputLoading)) return;
+              setDataUploadOpen(false);
+              setHallUploadFile(null);
+              setAnchorUploadFile(null);
+              if (hallFileInputRef.current) hallFileInputRef.current.value = "";
+              if (anchorFileInputRef.current) anchorFileInputRef.current.value = "";
+            };
+            const tabCls = (active: boolean, color: "blue" | "violet" | "amber") => {
+              if (!active) return "text-slate-500 hover:bg-slate-50";
+              if (color === "blue") return "text-feishu-blue border-b-2 border-feishu-blue bg-feishu-blue/5";
+              if (color === "violet") return "text-violet-600 border-b-2 border-violet-400 bg-violet-50/50";
+              return "text-amber-600 border-b-2 border-amber-400 bg-amber-50/50";
+            };
+            return (
+            <div
+              className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm"
+              onClick={close}
+            >
+              <div
+                className="w-[480px] max-w-[90vw] rounded-2xl bg-white shadow-2xl overflow-hidden"
+                onClick={(e) => e.stopPropagation()}
+              >
+                {/* Tab 切换 */}
+                <div className="flex border-b border-slate-200">
+                  <button
+                    onClick={() => setDataUploadTab("excel")}
+                    className={`flex-1 flex items-center justify-center gap-1.5 h-10 text-[12px] font-medium transition-colors ${tabCls(isExcel, "blue")}`}
+                  >
+                    <Upload size={13} />
+                    厅数据 / 流失表
+                  </button>
+                  <button
+                    onClick={() => setDataUploadTab("anchor")}
+                    className={`flex-1 flex items-center justify-center gap-1.5 h-10 text-[12px] font-medium transition-colors ${tabCls(isAnchor, "violet")}`}
+                  >
+                    <Users size={13} />
+                    主播数据表
+                  </button>
+                  <button
+                    onClick={() => setDataUploadTab("manual")}
+                    className={`flex-1 flex items-center justify-center gap-1.5 h-10 text-[12px] font-medium transition-colors ${tabCls(isManual, "amber")}`}
+                  >
+                    <FileSpreadsheet size={13} />
+                    数值录入
+                  </button>
+                  <button
+                    onClick={close}
+                    disabled={isExcel ? hallUploading : isAnchor ? anchorUploading : dataInputLoading}
+                    className="flex items-center justify-center w-10 h-10 text-slate-400 hover:bg-slate-100 disabled:opacity-40"
+                  >
+                    <X size={16} />
+                  </button>
+                </div>
+
+                {isExcel ? (
+                  /* ── 厅数据 / 流失表 ── */
+                  <>
+                    <div className="px-6 py-5 space-y-4">
+                      <div>
+                        <label className="flex items-center gap-1.5 text-[12px] font-medium text-slate-600 mb-1.5">
+                          <Calendar size={12} className="text-slate-400" />
+                          数据归属日期 <span className="text-red-500">*</span>
+                        </label>
+                        <input
+                          type="date"
+                          value={hallUploadDate}
+                          onChange={(e) => setHallUploadDate(e.target.value)}
+                          max={getBeijingDateStr(0)}
+                          className="w-full h-9 rounded-lg border border-slate-200 bg-white px-3 text-[13px] text-slate-700 focus:outline-none focus:border-feishu-blue focus:ring-2 focus:ring-feishu-blue/20"
+                        />
+                        <p className="mt-1 text-[11px] text-slate-400">
+                          自动解析 <b>「厅个数」</b>和<b>「主播流失」</b>两个工作表
+                        </p>
+                      </div>
+
+                      <div>
+                        <label className="flex items-center gap-1.5 text-[12px] font-medium text-slate-600 mb-1.5">
+                          <FileSpreadsheet size={12} className="text-slate-400" />
+                          选择文件 <span className="text-red-500">*</span>
+                        </label>
+                        <input ref={hallFileInputRef} type="file" accept=".xlsx,.xls" onChange={handleHallFileChange} className="hidden" />
+                        <button
+                          onClick={() => hallFileInputRef.current?.click()}
+                          className="w-full h-20 rounded-lg border-2 border-dashed border-slate-200 hover:border-feishu-blue hover:bg-feishu-blue/5 transition-colors flex flex-col items-center justify-center gap-1 text-slate-500 hover:text-feishu-blue"
+                        >
+                          {hallUploadFile ? (
+                            <>
+                              <FileSpreadsheet size={20} className="text-feishu-blue" />
+                              <span className="text-[12px] font-medium text-slate-700 truncate max-w-[300px]">{hallUploadFile.name}</span>
+                              <span className="text-[10px] text-slate-400">{(hallUploadFile.size / 1024).toFixed(1)} KB · 点击重新选择</span>
+                            </>
+                          ) : (
+                            <>
+                              <Upload size={20} />
+                              <span className="text-[12px]">点击选择 .xlsx / .xls 文件</span>
+                            </>
+                          )}
+                        </button>
+                      </div>
+                    </div>
+
+                    {hallUploadError && (
+                      <div className="px-6 py-2 text-[12px] text-red-600 bg-red-50 border-b border-red-100">{hallUploadError}</div>
+                    )}
+
+                    <div className="flex items-center justify-end gap-2 px-6 py-3 bg-slate-50 border-t border-slate-100">
+                      <button onClick={close} disabled={hallUploading} className="px-4 h-8 rounded-lg border border-slate-200 bg-white text-[12px] text-slate-600 hover:bg-slate-100 disabled:opacity-40 transition-colors">取消</button>
+                      <button onClick={handleHallConfirmUpload} disabled={hallUploading || !hallUploadFile || !hallUploadDate}
+                        className="flex items-center gap-1.5 px-4 h-8 rounded-lg bg-feishu-blue text-[12px] text-white hover:opacity-90 disabled:opacity-40 transition-opacity"
+                      >
+                        {hallUploading ? <><RefreshCw size={12} className="animate-spin" />上传中…</> : <><Upload size={12} />确认上传</>}
+                      </button>
+                    </div>
+                  </>
+                ) : isAnchor ? (
+                  /* ── 主播数据表 ── */
+                  <>
+                    <div className="px-6 py-5 space-y-4">
+                      <div>
+                        <label className="flex items-center gap-1.5 text-[12px] font-medium text-slate-600 mb-1.5">
+                          <Calendar size={12} className="text-slate-400" />
+                          数据归属日期 <span className="text-red-500">*</span>
+                        </label>
+                        <input
+                          type="date"
+                          value={anchorUploadDate}
+                          onChange={(e) => setAnchorUploadDate(e.target.value)}
+                          max={getBeijingDateStr(-1)}
+                          className="w-full h-9 rounded-lg border border-slate-200 bg-white px-3 text-[13px] text-slate-700 focus:outline-none focus:border-violet-400 focus:ring-2 focus:ring-violet-400/20"
+                        />
+                        <p className="mt-1 text-[11px] text-slate-400">
+                          上传的数据将归属到此日期，趋势图按此日期绘制
+                        </p>
+                      </div>
+
+                      <div>
+                        <label className="flex items-center gap-1.5 text-[12px] font-medium text-slate-600 mb-1.5">
+                          <FileSpreadsheet size={12} className="text-slate-400" />
+                          选择文件 <span className="text-red-500">*</span>
+                        </label>
+                        <input ref={anchorFileInputRef} type="file" accept=".xlsx,.xls" onChange={handleAnchorFileChange} className="hidden" />
+                        <button
+                          onClick={() => anchorFileInputRef.current?.click()}
+                          className="w-full h-20 rounded-lg border-2 border-dashed border-slate-200 hover:border-violet-400 hover:bg-violet-50/50 transition-colors flex flex-col items-center justify-center gap-1 text-slate-500 hover:text-violet-600"
+                        >
+                          {anchorUploadFile ? (
+                            <>
+                              <FileSpreadsheet size={20} className="text-violet-500" />
+                              <span className="text-[12px] font-medium text-slate-700 truncate max-w-[300px]">{anchorUploadFile.name}</span>
+                              <span className="text-[10px] text-slate-400">{(anchorUploadFile.size / 1024).toFixed(1)} KB · 点击重新选择</span>
+                            </>
+                          ) : (
+                            <>
+                              <Upload size={20} />
+                              <span className="text-[12px]">点击选择 .xlsx / .xls 文件</span>
+                            </>
+                          )}
+                        </button>
+                      </div>
+                    </div>
+
+                    {anchorUploadError && (
+                      <div className="px-6 py-2 text-[12px] text-red-600 bg-red-50 border-b border-red-100">{anchorUploadError}</div>
+                    )}
+
+                    <div className="flex items-center justify-end gap-2 px-6 py-3 bg-slate-50 border-t border-slate-100">
+                      <button onClick={close} disabled={anchorUploading} className="px-4 h-8 rounded-lg border border-slate-200 bg-white text-[12px] text-slate-600 hover:bg-slate-100 disabled:opacity-40 transition-colors">取消</button>
+                      <button onClick={handleAnchorConfirmUpload} disabled={anchorUploading || !anchorUploadFile || !anchorUploadDate}
+                        className="flex items-center gap-1.5 px-4 h-8 rounded-lg bg-violet-500 text-[12px] text-white hover:bg-violet-600 disabled:opacity-40 transition-colors"
+                      >
+                        {anchorUploading ? <><RefreshCw size={12} className="animate-spin" />上传中…</> : <><Upload size={12} />确认上传</>}
+                      </button>
+                    </div>
+                  </>
+                ) : (
+                  /* ── 数值录入 ── */
+                  <>
+                    <div className="px-6 py-5 space-y-5">
+                      {/* 直播间空余 */}
+                      <div>
+                        <div className="flex items-center gap-1.5 mb-2">
+                          <Building2 size={14} className="text-sky-600" />
+                          <span className="text-[13px] font-semibold text-slate-700">基地直播间空余 <span className="text-[10px] font-normal text-slate-400">(覆盖式)</span></span>
+                        </div>
+                        <div className="grid grid-cols-3 gap-2">
+                          <div><label className="text-[11px] text-slate-500 mb-0.5 block">总数量</label>
+                            <input type="number" min="0" value={dataInputTotal} onChange={(e) => setDataInputTotal(e.target.value)} placeholder="130" className="w-full h-9 rounded-lg border border-slate-200 bg-white px-2.5 text-[13px] text-slate-700 focus:outline-none focus:border-amber-400 focus:ring-2 focus:ring-amber-400/20" /></div>
+                          <div><label className="text-[11px] text-slate-500 mb-0.5 block">直播间已使用</label>
+                            <input type="number" min="0" value={dataInputLiveRoom} onChange={(e) => setDataInputLiveRoom(e.target.value)} placeholder="90" className="w-full h-9 rounded-lg border border-slate-200 bg-white px-2.5 text-[13px] text-slate-700 focus:outline-none focus:border-amber-400 focus:ring-2 focus:ring-amber-400/20" /></div>
+                          <div><label className="text-[11px] text-slate-500 mb-0.5 block">办公室已使用</label>
+                            <input type="number" min="0" value={dataInputOffice} onChange={(e) => setDataInputOffice(e.target.value)} placeholder="20" className="w-full h-9 rounded-lg border border-slate-200 bg-white px-2.5 text-[13px] text-slate-700 focus:outline-none focus:border-amber-400 focus:ring-2 focus:ring-amber-400/20" /></div>
+                        </div>
+                      </div>
+
+                      <div className="border-t border-slate-100" />
+
+                      {/* 人均音浪 */}
+                      <div>
+                        <div className="flex items-center gap-1.5 mb-2">
+                          <Zap size={14} className="text-amber-500" />
+                          <span className="text-[13px] font-semibold text-slate-700">人均音浪 <span className="text-[10px] font-normal text-slate-400">(每日记录)</span></span>
+                        </div>
+                        <div className="flex items-center gap-3">
+                          <div>
+                            <label className="text-[11px] text-slate-500 mb-0.5 block"><Calendar size={10} className="inline mr-0.5 text-slate-400" />数据日期</label>
+                            <input type="date" value={dataInputDate} onChange={(e) => setDataInputDate(e.target.value)} max={getBeijingDateStr(0)}
+                              className="h-9 rounded-lg border border-slate-200 bg-white px-2.5 text-[13px] text-slate-700 focus:outline-none focus:border-amber-400 focus:ring-2 focus:ring-amber-400/20" />
+                          </div>
+                          <div>
+                            <label className="text-[11px] text-slate-500 mb-0.5 block">线下人均音浪（万）</label>
+                            <input type="number" step="0.1" min="0" value={dataInputOfflineAvgWave} onChange={(e) => setDataInputOfflineAvgWave(e.target.value)} placeholder="8.3"
+                              className="w-24 h-9 rounded-lg border border-slate-200 bg-white px-2.5 text-[13px] text-slate-700 focus:outline-none focus:border-amber-400 focus:ring-2 focus:ring-amber-400/20" />
+                          </div>
+                          <div>
+                            <label className="text-[11px] text-slate-500 mb-0.5 block">线上人均音浪（万）</label>
+                            <input type="number" step="0.1" min="0" value={dataInputAvgWave} onChange={(e) => setDataInputAvgWave(e.target.value)} placeholder="12.5"
+                              className="w-24 h-9 rounded-lg border border-slate-200 bg-white px-2.5 text-[13px] text-slate-700 focus:outline-none focus:border-amber-400 focus:ring-2 focus:ring-amber-400/20" />
+                          </div>
+                          <div>
+                            <label className="text-[11px] text-slate-500 mb-0.5 block">人均音浪（万）</label>
+                            <input type="number" step="0.1" min="0" value={dataInputTotalAvgWave} onChange={(e) => setDataInputTotalAvgWave(e.target.value)} placeholder="10.4"
+                              className="w-24 h-9 rounded-lg border border-slate-200 bg-white px-2.5 text-[13px] text-slate-700 focus:outline-none focus:border-amber-400 focus:ring-2 focus:ring-amber-400/20" />
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    {dataInputError && (
+                      <div className="px-6 py-2 text-[12px] text-red-600 bg-red-50 border-b border-red-100">{dataInputError}</div>
+                    )}
+
+                    <div className="flex items-center justify-end gap-2 px-6 py-3 bg-slate-50 border-t border-slate-100">
+                      <button onClick={close} disabled={dataInputLoading} className="px-4 h-8 rounded-lg border border-slate-200 bg-white text-[12px] text-slate-600 hover:bg-slate-100 disabled:opacity-40 transition-colors">取消</button>
+                      <button onClick={handleDataInputSubmit} disabled={dataInputLoading}
+                        className="flex items-center gap-1.5 px-4 h-8 rounded-lg bg-amber-600 text-[12px] text-white hover:bg-amber-700 disabled:opacity-40 transition-colors"
+                      >
+                        {dataInputLoading ? <><RefreshCw size={12} className="animate-spin" />提交中…</> : "确认提交"}
+                      </button>
+                    </div>
+                  </>
+                )}
+              </div>
+            </div>
+            );
+          })()}
+
+        </div>
         );
       })()}
 
-          {/* ── 基地主播汇总卡片 ── */}
-          <AnchorSummaryCard scopeOrgId={scopeOrgId} />
-
-        </div>
+      {/* ── 基地主播趋势图：独占一行 ── */}
+      {showDashboard && (
+        <AnchorSummaryCard scopeOrgId={scopeOrgId} />
       )}
 
       {showDashboard && (
@@ -651,21 +1226,6 @@ export function CockpitPage() {
               )}
             </div>
             <div className="flex items-center gap-2">
-              {/* DEV_ADMIN / HQ_ADMIN 基地切换器 */}
-              {needsBaseSelect && baseOrgs.length > 0 && (
-                <div className="relative">
-                  <select
-                    value={selectedBaseOrgId}
-                    onChange={(e) => setSelectedBaseOrgId(e.target.value)}
-                    className="appearance-none rounded-lg border border-slate-200 bg-white pl-3 pr-7 py-1.5 text-[12px] text-slate-700 hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-feishu-blue/30 cursor-pointer"
-                  >
-                    {baseOrgs.map((b) => (
-                      <option key={b.id} value={b.id}>{b.name}</option>
-                    ))}
-                  </select>
-                  <ChevronDown size={12} className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-slate-400" />
-                </div>
-              )}
               {lastRefreshed && (
                 <span className="text-[11px] text-slate-400 tabular-nums">
                   {lastRefreshed.getHours().toString().padStart(2, "0")}:
